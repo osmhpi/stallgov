@@ -1,0 +1,6 @@
+*.cmd
+*.mod*
+memutil.ko
+Module.symvers
+*.o
+modules.order
