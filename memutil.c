@@ -96,6 +96,7 @@ static void memutil_stop(struct cpufreq_policy *policy)
 
 static void memutil_limits(struct cpufreq_policy *policy)
 {
+	printk(KERN_INFO "memutil limits changed");
 	// TODO
 }
 
@@ -110,11 +111,11 @@ struct cpufreq_governor memutil_gov = {
 	.limits = memutil_limits,
 };
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Erik Griese <erik.griese@student.hpi.de>, "
-	      "Leon Matthes <leon.matthes@student.hpi.de>, "
-	      "Maximilian Stiede <maximilian.stiede@student.hpi.de>");
-MODULE_DESCRIPTION("A CpuFreq governor based on Memory utilization.");
+MODULE_LICENSE(		"GPL");
+MODULE_AUTHOR(		"Erik Griese <erik.griese@student.hpi.de>, "
+			"Leon Matthes <leon.matthes@student.hpi.de>, "
+			"Maximilian Stiede <maximilian.stiede@student.hpi.de>");
+MODULE_DESCRIPTION(	"A CpuFreq governor based on Memory Access Patterns.");
 
 cpufreq_governor_init(memutil_gov);
 cpufreq_governor_exit(memutil_gov);
