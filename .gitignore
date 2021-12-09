@@ -1,6 +1,10 @@
+# make output files
 *.cmd
 *.mod*
 memutil.ko
 Module.symvers
 *.o
 modules.order
+
+# clangd
+compile_commands.json

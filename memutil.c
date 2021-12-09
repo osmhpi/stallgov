@@ -1,3 +1,8 @@
+#include "linux/cpufreq.h"
+#include "linux/percpu-defs.h"
+#include "linux/printk.h"
+#include "linux/rcupdate.h"
+#include "linux/smp.h"
 #include <linux/module.h> // included for all kernel modules
 #include <linux/kernel.h> // included for KERN_INFO
 #include <linux/init.h> // included for __init and __exit macros
@@ -7,13 +12,30 @@
 struct memutil_policy {
 	struct cpufreq_policy *policy;
 
-	raw_spinlock_t update_lock; /* For shared policies */
+	raw_spinlock_t	update_lock; /* For shared policies */
+	u64		last_freq_update_time;
+	s64		freq_update_delay_ns;
 };
+
+struct memutil_cpu {
+	struct update_util_data update_util;
+	struct memutil_policy	*memutil_policy;
+	unsigned int cpu;
+
+	u64			last_update;
+};
+
+static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 
 void memutil_set_frequency(struct cpufreq_policy *policy)
 {
-	pr_info("Setting frequency to: %u", policy->min);
-	cpufreq_driver_fast_switch(policy, policy->min);
+	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
+		pr_info_ratelimited("Setting frequency to: %u", policy->min);
+		cpufreq_driver_fast_switch(policy, policy->min);
+	}
+	else {
+		pr_err("Cannot set frequency");
+	}
 }
 
 /********************** cpufreq governor interface *********************/
@@ -72,6 +94,7 @@ static void memutil_exit(struct cpufreq_policy *policy)
 	struct memutil_policy *memutil_policy = policy->governor_data;
 
 	printk(KERN_INFO "Exiting memutil module");
+	pr_info("cpus: %px smp_processor_id: %d", policy->cpus->bits, smp_processor_id());
 
 	policy->governor_data = NULL;
 
@@ -79,16 +102,73 @@ static void memutil_exit(struct cpufreq_policy *policy)
 	cpufreq_disable_fast_switch(policy);
 }
 
+static bool memutil_this_cpu_can_update(struct cpufreq_policy *policy) {
+	return cpumask_test_cpu(smp_processor_id(), policy->cpus);
+	// TODO: Add policy->dvfs_possible_from_any_cpu, see: cpufreq_this_cpu_can_update
+}
+
+static bool memutil_should_update_frequency(struct memutil_policy *memutil_policy, u64 time)
+{
+	s64 delta_ns;
+
+	/*
+	 * Drivers cannot in general deal with cross-CPU
+	 * requests, so switching frequencies may not work for the fast
+	 * switching platforms.
+	 *
+	 * Hence stop here for remote requests if they aren't supported
+	 * by the hardware, as calculating the frequency is pointless if
+	 * we cannot in fact act on it.
+	 *
+	 * // vvvvvvvvvvvvvvvvvvv memutil TODO vvvvvvvvvvvvvvvvv
+	 * This is needed on the slow switching platforms too to prevent CPUs
+	 * going offline from leaving stale IRQ work items behind.
+	 * // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	 */
+	if (!memutil_this_cpu_can_update(memutil_policy->policy)) {
+		return false;
+	}
+
+	delta_ns = time - memutil_policy->last_freq_update_time;
+
+	return delta_ns >= memutil_policy->freq_update_delay_ns;
+}
+
+static void memutil_update_single_frequency(struct update_util_data *hook, u64 time,
+				     unsigned int flags)
+{
+	struct memutil_cpu *memutil_cpu = container_of(hook, struct memutil_cpu, update_util);
+	struct memutil_policy *memutil_policy = memutil_cpu->memutil_policy;
+
+	if(!memutil_should_update_frequency(memutil_policy, time)) {
+		return;
+	}
+
+	memutil_set_frequency(memutil_policy->policy);
+	memutil_policy->last_freq_update_time = time;
+}
+
 static int memutil_start(struct cpufreq_policy *policy)
 {
+	struct memutil_policy *memutil_policy = policy->governor_data;
+	unsigned int cpu;
 	printk(KERN_INFO "Starting memutil governor");
 
-	//struct memutil_policy *memutil_policy = policy->governor_data;
+	memutil_policy->last_freq_update_time	= 0;
+	memutil_policy->freq_update_delay_ns	= NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy);
 
-	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
-		memutil_set_frequency(policy);
-	} else {
-		pr_err("Can't set frequency");
+	for_each_cpu(cpu, policy->cpus) {
+		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
+
+		memset(mu_cpu, 0, sizeof(*mu_cpu));
+		mu_cpu->cpu 		= cpu;
+		mu_cpu->memutil_policy	= memutil_policy;
+	}
+
+	for_each_cpu(cpu, policy->cpus) {
+		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
+
+		cpufreq_add_update_util_hook(cpu, &mu_cpu->update_util, memutil_update_single_frequency);
 	}
 
 	return 0;
@@ -96,19 +176,22 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 static void memutil_stop(struct cpufreq_policy *policy)
 {
+	unsigned int cpu;
+
 	printk(KERN_INFO "Stopping memutil governor");
 	// TODO
+	//
+	for_each_cpu(cpu, policy->cpus) {
+		cpufreq_remove_update_util_hook(cpu);
+	}
+
+	synchronize_rcu();
 }
 
 static void memutil_limits(struct cpufreq_policy *policy)
 {
 	printk(KERN_INFO "memutil limits changed");
 	// TODO
-	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
-		memutil_set_frequency(policy);
-	} else {
-		pr_err("Can't set frequency");
-	}
 }
 
 struct cpufreq_governor memutil_gov = {
