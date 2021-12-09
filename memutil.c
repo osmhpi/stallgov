@@ -10,6 +10,12 @@ struct memutil_policy {
 	raw_spinlock_t update_lock; /* For shared policies */
 };
 
+void memutil_set_frequency(struct cpufreq_policy *policy)
+{
+	pr_info("Setting frequency to: %u", policy->min);
+	cpufreq_driver_fast_switch(policy, policy->min);
+}
+
 /********************** cpufreq governor interface *********************/
 
 static struct memutil_policy *
@@ -34,9 +40,10 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 
 static int memutil_init(struct cpufreq_policy *policy)
 {
-	printk(KERN_INFO "Loading memutil module");
 	struct memutil_policy *memutil_policy;
 	int return_value = 0;
+
+	printk(KERN_INFO "Loading memutil module");
 
 	/* State should be equivalent to EXIT */
 	if (policy->governor_data) {
@@ -62,9 +69,9 @@ disable_fast_switch:
 
 static void memutil_exit(struct cpufreq_policy *policy)
 {
-	printk(KERN_INFO "Exiting memutil module");
-
 	struct memutil_policy *memutil_policy = policy->governor_data;
+
+	printk(KERN_INFO "Exiting memutil module");
 
 	policy->governor_data = NULL;
 
@@ -76,11 +83,10 @@ static int memutil_start(struct cpufreq_policy *policy)
 {
 	printk(KERN_INFO "Starting memutil governor");
 
-	struct memutil_policy *memutil_policy = policy->governor_data;
+	//struct memutil_policy *memutil_policy = policy->governor_data;
 
-	if (policy_is_shared(policy) && policy->fast_switch_enabled &&
-	    cpufreq_driver_has_adjust_perf()) {
-		memutil_set_frequency();
+	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
+		memutil_set_frequency(policy);
 	} else {
 		pr_err("Can't set frequency");
 	}
@@ -98,6 +104,11 @@ static void memutil_limits(struct cpufreq_policy *policy)
 {
 	printk(KERN_INFO "memutil limits changed");
 	// TODO
+	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
+		memutil_set_frequency(policy);
+	} else {
+		pr_err("Can't set frequency");
+	}
 }
 
 struct cpufreq_governor memutil_gov = {
