@@ -14,6 +14,8 @@ This module is based on the guide: https://thegeekstuff.com/2013/07/write-linux-
     - kernel-devel
     - kernel-headers
 
+The current implementation requires a kernel patch:
+* in `kernel/events/core.c` add `EXPORT_SYMBOL_GPL(perf_event_read_local);` after the definition of `perf_event_read_local`
 
 ## Compilation
 To compile the module, simply run `make`.
@@ -48,3 +50,6 @@ Switch to the governor by using `cpupower frequency-set -g memutil`.
 Before removing the memutil kernel module, please switch back to another governor like schedutil.
 
 Then run `sudo rmmod memutil.ko` to remove the module from your kernel.
+
+## Output log
+You can view the debug output of memutil via `dmesg`.
