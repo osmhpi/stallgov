@@ -4,18 +4,23 @@
 #include <linux/types.h>
 #include <linux/spinlock.h>
 
-struct memutil_perf_data;
-
-struct memutil_ringbuffer {
-	struct memutil_perf_data *data;
-	int size;
-	atomic_t insert_offset;
-
-	raw_spinlock_t update_lock;
+struct memutil_perf_data {
+	u64 timestamp;
+	unsigned int frequency;
+	unsigned int cpu;
 };
 
-struct memutil_ringbuffer *memutil_open_ringbuffer(int buffer_size);
+struct memutil_ringbuffer {
+	raw_spinlock_t lock;
+	struct memutil_perf_data *data;
+	u32 size;
+	u32 insert_offset;
+	bool had_wraparound;
+};
+
+struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size);
 void memutil_close_ringbuffer(struct memutil_ringbuffer *buffer);
-int memutil_write_ringbuffer(struct memutil_ringbuffer *buffer, struct memutil_perf_data *data, int count);
+int memutil_write_ringbuffer(struct memutil_ringbuffer *buffer, struct memutil_perf_data *data, u32 count);
+int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer);
 
 #endif

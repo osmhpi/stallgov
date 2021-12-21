@@ -9,12 +9,17 @@
 #include <linux/sched/cpufreq.h>
 #include <trace/events/power.h>
 
+#include "memutil_log.h"
+#include "memutil_debugfs.h"
+
+#define LOGBUFFER_SIZE 2000
+
 struct memutil_policy {
 	struct cpufreq_policy *policy;
 
-	raw_spinlock_t	update_lock; /* For shared policies */
 	u64		last_freq_update_time;
 	s64		freq_update_delay_ns;
+	struct memutil_ringbuffer *logbuffer;
 };
 
 struct memutil_cpu {
@@ -25,12 +30,37 @@ struct memutil_cpu {
 	u64			last_update;
 };
 
-static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
+struct memutil_logfile_info {
+	bool is_initialized;
+	bool tried_init;
+};
 
-void memutil_set_frequency(struct cpufreq_policy *policy)
+static struct memutil_logfile_info logfile_info = {
+	.is_initialized = false,
+	.tried_init = false
+};
+
+static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
+static DEFINE_MUTEX(memutil_init_mutex);
+
+static void memutil_log_data(u64 time, unsigned int frequency, unsigned int cpu, struct memutil_ringbuffer *logbuffer)
 {
+	struct memutil_perf_data data = {
+		.timestamp = time,
+		.frequency = frequency,
+		.cpu = cpu
+	};
+
+	if (logbuffer) {
+		memutil_write_ringbuffer(logbuffer, &data, 1);
+	}
+}
+
+void memutil_set_frequency(struct cpufreq_policy *policy, u64 time)
+{
+	struct memutil_policy *memutil_policy = policy->governor_data;
 	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
-		pr_info_ratelimited("Setting frequency to: %u", policy->min);
+		memutil_log_data(time, policy->min, policy->cpu, memutil_policy->logbuffer);
 		cpufreq_driver_fast_switch(policy, policy->min);
 	}
 	else {
@@ -51,7 +81,6 @@ memutil_policy_alloc(struct cpufreq_policy *policy)
 	}
 
 	memutil_policy->policy = policy;
-	raw_spin_lock_init(&memutil_policy->update_lock);
 	return memutil_policy;
 }
 
@@ -144,7 +173,7 @@ static void memutil_update_single_frequency(struct update_util_data *hook, u64 t
 		return;
 	}
 
-	memutil_set_frequency(memutil_policy->policy);
+	memutil_set_frequency(memutil_policy->policy, time);
 	memutil_policy->last_freq_update_time = time;
 }
 
@@ -157,6 +186,22 @@ static int memutil_start(struct cpufreq_policy *policy)
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy);
 
+	mutex_lock(&memutil_init_mutex);
+	if (!logfile_info.tried_init) {
+		logfile_info.tried_init = true;
+		logfile_info.is_initialized = memutil_debugfs_init() == 0;
+		if (!logfile_info.is_initialized) {
+			pr_warn("Failed to initialize memutil debugfs logfile");
+		}
+	}
+	memutil_policy->logbuffer = memutil_open_ringbuffer(LOGBUFFER_SIZE);
+	if (!memutil_policy->logbuffer) {
+		pr_warn("Failed to create memutil logbuffer");
+	} else if (logfile_info.is_initialized) {
+		memutil_debugfs_register_ringbuffer(memutil_policy->logbuffer);
+	}
+	mutex_unlock(&memutil_init_mutex);
+
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
 
@@ -167,7 +212,6 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
-
 		cpufreq_add_update_util_hook(cpu, &mu_cpu->update_util, memutil_update_single_frequency);
 	}
 
@@ -177,10 +221,22 @@ static int memutil_start(struct cpufreq_policy *policy)
 static void memutil_stop(struct cpufreq_policy *policy)
 {
 	unsigned int cpu;
+	struct memutil_policy *memutil_policy = policy->governor_data;
 
 	printk(KERN_INFO "Stopping memutil governor");
 	// TODO
 	//
+	mutex_lock(&memutil_init_mutex);
+	if (logfile_info.is_initialized) {
+		memutil_debugfs_exit();
+		logfile_info.is_initialized = false;
+		logfile_info.tried_init = false;
+	}
+	mutex_unlock(&memutil_init_mutex);
+
+	if (memutil_policy->logbuffer) {
+		memutil_close_ringbuffer(memutil_policy->logbuffer);
+	}
 	for_each_cpu(cpu, policy->cpus) {
 		cpufreq_remove_update_util_hook(cpu);
 	}
