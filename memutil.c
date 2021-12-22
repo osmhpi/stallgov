@@ -16,11 +16,10 @@
 
 #define LOGBUFFER_SIZE 2000
 
-#error "This code causes memory corruption!!"
-
 struct memutil_policy {
 	struct cpufreq_policy *policy;
 
+	raw_spinlock_t		update_lock; /* For shared policies */
 	u64			last_freq_update_time;
 	s64			freq_update_delay_ns;
 
@@ -107,6 +106,7 @@ memutil_policy_alloc(struct cpufreq_policy *policy)
 	}
 
 	memutil_policy->policy = policy;
+	raw_spin_lock_init(&memutil_policy->update_lock);
 	return memutil_policy;
 }
 
@@ -249,7 +249,7 @@ static void memutil_update_single_frequency(struct update_util_data *hook, u64 t
 		return;
 	}
 
-	memutil_set_frequency(memutil_policy, time);
+	memutil_set_frequency(memutil_policy);
 	memutil_policy->last_freq_update_time = time;
 }
 
@@ -262,7 +262,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy);
 
-	mutex_lock(&memutil_init_mutex);
+    mutex_lock(&memutil_init_mutex);
 	if (!logfile_info.tried_init) {
 		logfile_info.tried_init = true;
 		logfile_info.is_initialized = memutil_debugfs_init() == 0;
@@ -298,7 +298,6 @@ static int memutil_start(struct cpufreq_policy *policy)
 static void memutil_stop(struct cpufreq_policy *policy)
 {
 	unsigned int cpu;
-	struct memutil_policy *memutil_policy = policy->governor_data;
 
 	printk(KERN_INFO "Stopping memutil governor");
 	// TODO
