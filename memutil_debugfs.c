@@ -72,7 +72,7 @@ int memutil_debugfs_init(void)
 	}
 	logfile_data = kzalloc(sizeof(struct memutil_logfile_data), GFP_KERNEL);
 	if (!logfile_data) {
-		pr_warn("Alloc logfile_data failed:");
+		pr_warn("Alloc logfile_data failed");
 		goto filedata_error;
 	}
 	logfile_data->data = vmalloc(LOGFILE_CAPACITY);

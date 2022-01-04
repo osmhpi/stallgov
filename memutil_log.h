@@ -6,7 +6,7 @@
 
 struct memutil_perf_data {
 	u64 timestamp;
-	unsigned int frequency;
+	u64 perf_value;
 	unsigned int cpu;
 };
 

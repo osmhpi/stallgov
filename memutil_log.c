@@ -10,14 +10,14 @@
 
 static void memutil_output_element(struct memutil_perf_data *element, bool write_logfile)
 {
-	char text[80]; //34 text chars + 46 numbers
+	char text[80]; //25 text chars + rest numbers
 	size_t bytes_written;
 
 	if (!write_logfile) {
-		pr_info("CPU[%u]: At: %llu set freq to: %u", element->cpu, element->timestamp, element->frequency);
+		pr_info("CPU[%u]: At: %llu perf value: %llu", element->cpu, element->timestamp, element->perf_value);
 		return;
 	}
-	bytes_written = snprintf(text, sizeof(text), "CPU[%u]: At: %llu set freq to: %u\n", element->cpu, element->timestamp, element->frequency);
+	bytes_written = snprintf(text, sizeof(text), "CPU[%u]: At: %llu perf_value: %llu\n", element->cpu, element->timestamp, element->perf_value);
 	memutil_debugfs_append_to_logfile(text, bytes_written);
 }
 

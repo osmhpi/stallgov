@@ -47,11 +47,11 @@ static struct memutil_logfile_info logfile_info = {
 static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
 
-static void memutil_log_data(u64 time, unsigned int frequency, unsigned int cpu, struct memutil_ringbuffer *logbuffer)
+static void memutil_log_data(u64 time, u64 perf_value, unsigned int cpu, struct memutil_ringbuffer *logbuffer)
 {
 	struct memutil_perf_data data = {
 		.timestamp = time,
-		.frequency = frequency,
+		.perf_value = perf_value,
 		.cpu = cpu
 	};
 
@@ -77,18 +77,17 @@ void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
 				&running_time); 
 
 		if(likely(perf_result == 0)) {
-			pr_info_ratelimited("Perf value %llu", perf_value);
+			memutil_log_data(time, perf_value, policy->cpu, memutil_policy->logbuffer);
 		} else {
 			pr_info_ratelimited("Perf read failed: %d", perf_result);
 		}
 	}
 
 	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
-		memutil_log_data(time, policy->min, policy->cpu, memutil_policy->logbuffer);
-		cpufreq_driver_fast_switch(policy, policy->min);
+		cpufreq_driver_fast_switch(policy, policy->max);
 	}
 	else {
-		pr_err("Cannot set frequency");
+		pr_err_ratelimited("Cannot set frequency");
 	}
 }
 
