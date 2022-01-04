@@ -27,9 +27,9 @@ struct memutil_policy {
 };
 
 struct memutil_cpu {
-	struct update_util_data update_util;
+	struct update_util_data	update_util;
 	struct memutil_policy	*memutil_policy;
-	unsigned int cpu;
+	unsigned int		cpu;
 
 	u64			last_update;
 };
@@ -69,18 +69,16 @@ void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
 	u64			running_time;
 	struct cpufreq_policy 	*policy = memutil_policy->policy;
 
-	if(memutil_policy->policy->cpu == 0) {
-		perf_result = perf_event_read_local(
-				memutil_policy->perf_event,
-				&perf_value,
-				&enabled_time,
-				&running_time); 
+	perf_result = perf_event_read_local(
+			memutil_policy->perf_event,
+			&perf_value,
+			&enabled_time,
+			&running_time); 
 
-		if(likely(perf_result == 0)) {
-			memutil_log_data(time, perf_value, policy->cpu, memutil_policy->logbuffer);
-		} else {
-			pr_info_ratelimited("Perf read failed: %d", perf_result);
-		}
+	if(likely(perf_result == 0)) {
+		memutil_log_data(time, perf_value, policy->cpu, memutil_policy->logbuffer);
+	} else {
+		pr_info_ratelimited("Perf read failed: %d", perf_result);
 	}
 
 	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
