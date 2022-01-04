@@ -70,7 +70,7 @@ int memutil_debugfs_init(void)
 		pr_warn("Create dir failed: %pe", root_dir);
 		goto rootdir_error;
 	}
-	logfile_data = kzalloc(sizeof(logfile_data), GFP_KERNEL);
+	logfile_data = kzalloc(sizeof(struct memutil_logfile_data), GFP_KERNEL);
 	if (!logfile_data) {
 		pr_warn("Alloc logfile_data failed:");
 		goto filedata_error;
@@ -129,7 +129,6 @@ int memutil_debugfs_register_ringbuffer(struct memutil_ringbuffer *buffer)
 
 int memutil_debugfs_append_to_logfile(char *buffer, size_t buffer_size)
 {
-	pr_info("memutil_append_to_logfile: used: %lu, total: %lu, buf_size: %lu", logfile_data->size_used, logfile_data->size_total, buffer_size);
 	if (logfile_data->size_used + buffer_size > logfile_data->size_total) {
 		pr_warn("logfile is getting to large. Force clear");
 		clear_log();

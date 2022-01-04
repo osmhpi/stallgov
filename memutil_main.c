@@ -16,8 +16,6 @@
 
 #define LOGBUFFER_SIZE 2000
 
-#error "This code causes memory corruption!!"
-
 struct memutil_policy {
 	struct cpufreq_policy *policy;
 
