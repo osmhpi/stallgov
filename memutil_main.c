@@ -18,6 +18,8 @@
 
 #define LOGBUFFER_SIZE 2000
 
+#define AGGREGATE_LOG 0
+
 struct memutil_policy {
 	struct cpufreq_policy *policy;
 
@@ -31,6 +33,9 @@ struct memutil_policy {
 	u64			last_cache_references_value;
 
 	struct memutil_ringbuffer *logbuffer;
+#if AGGREGATE_LOG
+	unsigned int log_counter;
+#endif
 };
 
 struct memutil_cpu {
@@ -80,6 +85,14 @@ void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
 	u64			enabled_time;
 	u64			running_time;
 	struct cpufreq_policy 	*policy = memutil_policy->policy;
+
+#if AGGREGATE_LOG
+	memutil_policy->log_counter++;
+	if (memutil_policy->log_counter <= 25) {
+		return;
+	}
+	memutil_policy->log_counter = 0;
+#endif
 
 	perf_result = perf_event_read_local(
 			memutil_policy->perf_cache_references_event,
