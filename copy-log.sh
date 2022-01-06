@@ -5,7 +5,7 @@ usage() {
 }
 
 copy_log_part() {
-    cat $1 | grep "CPU\[$2\]" >> $3/log-$2.txt
+    cat $1 | grep "^$2," >> $3/log-$2.txt
 }
 
 [ $# -eq 0 ] && usage && exit 1

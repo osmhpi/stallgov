@@ -17,7 +17,7 @@ static void memutil_output_element(struct memutil_perf_data *element, bool write
 		pr_info("CPU[%u]: At: %llu perf value: %llu", element->cpu, element->timestamp, element->perf_value);
 		return;
 	}
-	bytes_written = snprintf(text, sizeof(text), "CPU[%u]: At: %llu perf_value: %llu\n", element->cpu, element->timestamp, element->perf_value);
+	bytes_written = snprintf(text, sizeof(text), "%u,%llu,%llu\n", element->cpu, element->timestamp, element->perf_value);
 	memutil_debugfs_append_to_logfile(text, bytes_written);
 }
 
