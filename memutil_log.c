@@ -24,6 +24,9 @@ static void memutil_output_element(struct memutil_perf_data *element, bool write
 static void memutil_output_data(struct memutil_ringbuffer *buffer, bool write_logfile)
 {
 	int i, read_offset, valid_size;
+	if (buffer->had_wraparound) {
+		pr_warn_ratelimited("Memutil: Ringbuffer had wraparound!");
+	}
 	read_offset = buffer->had_wraparound ? buffer->insert_offset : 0;
 	valid_size = buffer->had_wraparound ? buffer->size : buffer->insert_offset;
 

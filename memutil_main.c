@@ -323,6 +323,11 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy);
+	if (policy->cpu == 0) {
+		pr_info("Memutil: Update delay is: %lld us, Ringbuffer will be full after %lld seconds",
+			memutil_policy->freq_update_delay_ns / 1000,
+			LOGBUFFER_SIZE / (NSEC_PER_SEC / memutil_policy->freq_update_delay_ns));
+	}
 
 	mutex_lock(&memutil_init_mutex);
 	if (!logfile_info.tried_init) {
