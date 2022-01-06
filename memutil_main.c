@@ -1,5 +1,7 @@
+#include "linux/compiler.h"
 #include "linux/cpufreq.h"
 #include "linux/percpu-defs.h"
+#include "linux/perf_event.h"
 #include "linux/printk.h"
 #include "linux/rcupdate.h"
 #include "linux/smp.h"
@@ -22,7 +24,12 @@ struct memutil_policy {
 	u64			last_freq_update_time;
 	s64			freq_update_delay_ns;
 
-	struct perf_event	*perf_event;
+	struct perf_event	*perf_cache_references_event;
+	struct perf_event	*perf_cache_misses_event;
+
+	u64			last_cache_misses_value;
+	u64			last_cache_references_value;
+
 	struct memutil_ringbuffer *logbuffer;
 };
 
@@ -60,26 +67,54 @@ static void memutil_log_data(u64 time, u64 perf_value, unsigned int cpu, struct 
 	}
 }
 
-void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
+void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
 {
+	u64			cache_references_value;
+	u64			cache_references_diff;
+
+	u64			cache_misses_value;
+	u64			cache_misses_diff;
 
 	int			perf_result;
-	u64			perf_value;
 	u64			enabled_time;
 	u64			running_time;
 	struct cpufreq_policy 	*policy = memutil_policy->policy;
 
 	perf_result = perf_event_read_local(
-			memutil_policy->perf_event,
-			&perf_value,
+			memutil_policy->perf_cache_references_event,
+			&cache_references_value,
 			&enabled_time,
 			&running_time); 
 
-	if(likely(perf_result == 0)) {
-		memutil_log_data(time, perf_value, policy->cpu, memutil_policy->logbuffer);
-	} else {
-		pr_info_ratelimited("Perf read failed: %d", perf_result);
+	if(unlikely(perf_result != 0)) {
+		pr_info_ratelimited("Perf cache references read failed: %d", perf_result);
+		return;
 	}
+
+	cache_references_diff = cache_references_value - memutil_policy->last_cache_references_value;
+	memutil_policy->last_cache_references_value = cache_references_value;
+
+	perf_result = perf_event_read_local(
+			memutil_policy->perf_cache_misses_event,
+			&cache_misses_value,
+			&enabled_time,
+			&running_time);
+
+	if(unlikely(perf_result != 0)) {
+		pr_info_ratelimited("Perf cache misses read failed: %d", perf_result);
+	}
+
+	cache_misses_diff = cache_misses_value - memutil_policy->last_cache_misses_value;
+	memutil_policy->last_cache_misses_value = cache_misses_value;
+
+	memutil_log_data(time, cache_misses_diff, policy->cpu, memutil_policy->logbuffer);
+}
+
+void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
+{
+	struct cpufreq_policy 	*policy = memutil_policy->policy;
+
+	memutil_log_perf_data(memutil_policy, time);
 
 	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
 		cpufreq_driver_fast_switch(policy, policy->max);
@@ -110,16 +145,16 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 	kfree(memutil_policy);
 }
 
-static long __must_check memutil_allocate_perf_counter(struct memutil_policy *policy) 
+static struct perf_event * __must_check memutil_allocate_perf_counter_for(struct memutil_policy *policy, u32 perf_event_type, u64 perf_event_config)
 {
 	struct perf_event_attr perf_attr;
 	struct perf_event *perf_event;
 
 	memset(&perf_attr, 0, sizeof(perf_attr));
 
-	perf_attr.type = PERF_TYPE_HARDWARE;
+	perf_attr.type = perf_event_type;
 	perf_attr.size = sizeof(perf_attr);
-	perf_attr.config = PERF_COUNT_HW_INSTRUCTIONS;
+	perf_attr.config = perf_event_config;
 	perf_attr.disabled = 0; // enable the event by default
 	perf_attr.exclude_kernel = 1;
 	perf_attr.exclude_hv = 1;
@@ -131,21 +166,53 @@ static long __must_check memutil_allocate_perf_counter(struct memutil_policy *po
 			/*overflow_handler*/ NULL,
 			/*context*/ NULL);
 
-	if(unlikely(IS_ERR(perf_event))) {
-		return PTR_ERR(perf_event);
+	return perf_event;
+}
+
+static long __must_check memutil_allocate_perf_counters(struct memutil_policy *policy) 
+{
+	struct perf_event *perf_event_cache_references;
+	struct perf_event *perf_event_cache_misses;
+
+	perf_event_cache_references = memutil_allocate_perf_counter_for(
+			policy,
+			PERF_TYPE_HARDWARE,
+			PERF_COUNT_HW_CACHE_REFERENCES);
+
+	if(unlikely(IS_ERR(perf_event_cache_references))) {
+		return PTR_ERR(perf_event_cache_references);
 	}
 
-	policy->perf_event = perf_event;
+	perf_event_cache_misses = memutil_allocate_perf_counter_for(
+			policy,
+			PERF_TYPE_HARDWARE,
+			PERF_COUNT_HW_CACHE_MISSES);
+
+	if(unlikely(IS_ERR(perf_event_cache_misses))) {
+		perf_event_release_kernel(perf_event_cache_references);
+		return PTR_ERR(perf_event_cache_misses);
+	}
+
+	policy->perf_cache_references_event = perf_event_cache_references;
+	policy->perf_cache_misses_event = perf_event_cache_misses;
 	return 0;
 }
 
-static void memutil_release_perf_event(struct memutil_policy *policy)
+static void memutil_release_perf_events(struct memutil_policy *policy)
 {
-	if(unlikely(policy->perf_event == NULL)) {
-		pr_warn("Tried to release perf_event which is NULL");
-		return;
+	if(unlikely(policy->perf_cache_references_event == NULL)) {
+		pr_warn("Tried to release perf_cache_references_event which is NULL");
 	}
-	perf_event_release_kernel(policy->perf_event);
+	else {
+		perf_event_release_kernel(policy->perf_cache_references_event);
+	}
+
+	if(unlikely(policy->perf_cache_misses_event == NULL)) {
+		pr_warn("Tried to release perf_cache_misses_event which is NULL");
+	}
+	else {
+		perf_event_release_kernel(policy->perf_cache_misses_event);
+	}
 }
 
 static int memutil_init(struct cpufreq_policy *policy)
@@ -171,7 +238,7 @@ static int memutil_init(struct cpufreq_policy *policy)
 
 	policy->governor_data = memutil_policy;
 
-	return_value = (int) memutil_allocate_perf_counter(memutil_policy);
+	return_value = (int) memutil_allocate_perf_counters(memutil_policy);
 	if (unlikely(return_value != 0)) {
 		pr_err("Failed to acquire hardware performance counter");
 		goto free_policy;
@@ -197,7 +264,7 @@ static void memutil_exit(struct cpufreq_policy *policy)
 
 	policy->governor_data = NULL;
 
-	memutil_release_perf_event(memutil_policy);
+	memutil_release_perf_events(memutil_policy);
 	memutil_policy_free(memutil_policy);
 	cpufreq_disable_fast_switch(policy);
 }
