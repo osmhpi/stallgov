@@ -14,10 +14,10 @@ static void memutil_output_element(struct memutil_perf_data *element, bool write
 	size_t bytes_written;
 
 	if (!write_logfile) {
-		pr_info("CPU[%u]: At: %llu perf value: %llu", element->cpu, element->timestamp, element->perf_value);
+		pr_info("CPU[%u]: At: %llu misses: %llu, references: %llu", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
 		return;
 	}
-	bytes_written = snprintf(text, sizeof(text), "%u,%llu,%llu\n", element->cpu, element->timestamp, element->perf_value);
+	bytes_written = snprintf(text, sizeof(text), "%u,%llu,%llu,%llu\n", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
 	memutil_debugfs_append_to_logfile(text, bytes_written);
 }
 

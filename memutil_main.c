@@ -54,11 +54,12 @@ static struct memutil_logfile_info logfile_info = {
 static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
 
-static void memutil_log_data(u64 time, u64 perf_value, unsigned int cpu, struct memutil_ringbuffer *logbuffer)
+static void memutil_log_data(u64 time, u64 cache_references, u64 cache_misses, unsigned int cpu, struct memutil_ringbuffer *logbuffer)
 {
 	struct memutil_perf_data data = {
 		.timestamp = time,
-		.perf_value = perf_value,
+		.cache_misses = cache_misses,
+		.cache_references = cache_references,
 		.cpu = cpu
 	};
 
@@ -107,7 +108,7 @@ void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
 	cache_misses_diff = cache_misses_value - memutil_policy->last_cache_misses_value;
 	memutil_policy->last_cache_misses_value = cache_misses_value;
 
-	memutil_log_data(time, cache_misses_diff, policy->cpu, memutil_policy->logbuffer);
+	memutil_log_data(time, cache_references_diff, cache_misses_diff, policy->cpu, memutil_policy->logbuffer);
 }
 
 void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
