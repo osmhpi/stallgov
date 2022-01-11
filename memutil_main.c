@@ -15,6 +15,8 @@
 
 #include "memutil_log.h"
 #include "memutil_debugfs.h"
+#include "memutil_debugfs_log.h"
+#include "memutil_debugfs_info.h"
 
 #define LOGBUFFER_SIZE 2000
 
@@ -101,7 +103,7 @@ void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
 			&running_time); 
 
 	if(unlikely(perf_result != 0)) {
-		pr_info_ratelimited("Perf cache references read failed: %d", perf_result);
+		pr_info_ratelimited("Memutil: Perf cache references read failed: %d", perf_result);
 		return;
 	}
 
@@ -115,7 +117,7 @@ void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
 			&running_time);
 
 	if(unlikely(perf_result != 0)) {
-		pr_info_ratelimited("Perf cache misses read failed: %d", perf_result);
+		pr_info_ratelimited("Memutil: Perf cache misses read failed: %d", perf_result);
 	}
 
 	cache_misses_diff = cache_misses_value - memutil_policy->last_cache_misses_value;
@@ -134,7 +136,7 @@ void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
 		cpufreq_driver_fast_switch(policy, policy->max);
 	}
 	else {
-		pr_err_ratelimited("Cannot set frequency");
+		pr_err_ratelimited("Memutil: Cannot set frequency");
 	}
 }
 
@@ -215,14 +217,14 @@ static long __must_check memutil_allocate_perf_counters(struct memutil_policy *p
 static void memutil_release_perf_events(struct memutil_policy *policy)
 {
 	if(unlikely(policy->perf_cache_references_event == NULL)) {
-		pr_warn("Tried to release perf_cache_references_event which is NULL");
+		pr_warn("Memutil: Tried to release perf_cache_references_event which is NULL");
 	}
 	else {
 		perf_event_release_kernel(policy->perf_cache_references_event);
 	}
 
 	if(unlikely(policy->perf_cache_misses_event == NULL)) {
-		pr_warn("Tried to release perf_cache_misses_event which is NULL");
+		pr_warn("Memutil: Tried to release perf_cache_misses_event which is NULL");
 	}
 	else {
 		perf_event_release_kernel(policy->perf_cache_misses_event);
@@ -234,7 +236,7 @@ static int memutil_init(struct cpufreq_policy *policy)
 	struct memutil_policy 	*memutil_policy;
 	int 			return_value = 0;
 
-	printk(KERN_INFO "Loading memutil module");
+	pr_info("Memutil: Loading module (core=%d)", policy->cpu);
 
 	/* State should be equivalent to EXIT */
 	if (policy->governor_data) {
@@ -245,7 +247,7 @@ static int memutil_init(struct cpufreq_policy *policy)
 
 	memutil_policy = memutil_policy_alloc(policy);
 	if (!memutil_policy) {
-		pr_err("Failed to allocate memutil policy!");
+		pr_err("Memutil: Failed to allocate memutil policy!");
 		return_value = -ENOMEM;
 		goto disable_fast_switch;
 	}
@@ -254,7 +256,7 @@ static int memutil_init(struct cpufreq_policy *policy)
 
 	return_value = (int) memutil_allocate_perf_counters(memutil_policy);
 	if (unlikely(return_value != 0)) {
-		pr_err("Failed to acquire hardware performance counter");
+		pr_err("Memutil: Failed to acquire hardware performance counter");
 		goto free_policy;
 	}
 
@@ -265,7 +267,7 @@ free_policy:
 	// fallthrough
 disable_fast_switch:
 	cpufreq_disable_fast_switch(policy);
-	pr_err("memutil_init failed (error %d)\n", return_value);
+	pr_err("Memutil: init failed (error %d)\n", return_value);
 	return return_value;
 }
 
@@ -273,8 +275,7 @@ static void memutil_exit(struct cpufreq_policy *policy)
 {
 	struct memutil_policy *memutil_policy = policy->governor_data;
 
-	printk(KERN_INFO "Exiting memutil module");
-	pr_info("cpus: %px smp_processor_id: %d", policy->cpus->bits, smp_processor_id());
+	pr_info("Memutil: Exiting module (core=%d)", policy->cpu);
 
 	policy->governor_data = NULL;
 
@@ -315,9 +316,11 @@ static bool memutil_should_update_frequency(struct memutil_policy *memutil_polic
 	return delta_ns >= memutil_policy->freq_update_delay_ns;
 }
 
-static void memutil_update_single_frequency(struct update_util_data *hook, u64 time,
-				     unsigned int flags)
-{
+static void memutil_update_single_frequency(
+	struct update_util_data *hook, 
+	u64 time,
+	unsigned int flags
+) {
 	struct memutil_cpu *memutil_cpu = container_of(hook, struct memutil_cpu, update_util);
 	struct memutil_policy *memutil_policy = memutil_cpu->memutil_policy;
 
@@ -332,28 +335,42 @@ static void memutil_update_single_frequency(struct update_util_data *hook, u64 t
 static int memutil_start(struct cpufreq_policy *policy)
 {
 	struct memutil_policy *memutil_policy = policy->governor_data;
+	struct memutil_infofile_data infofile_data;
 	unsigned int cpu;
-	printk(KERN_INFO "Starting memutil governor");
 
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy);
+	infofile_data.update_interval = memutil_policy->freq_update_delay_ns / 1000;
 	if (policy->cpu == 0) {
-		pr_info("Memutil: Update delay is: %lld us, Ringbuffer will be full after %lld seconds",
-			memutil_policy->freq_update_delay_ns / 1000,
+		pr_info("Memutil: Info\n"
+			"Populatable CPUs=%d\n"
+			"Populated CPUs=%d\n"
+			"CPUs available to scheduler=%d\n"
+			"CPUs available to migration=%d\n",
+			num_possible_cpus(),
+			num_present_cpus(),
+			num_online_cpus(),
+			num_active_cpus()
+		);
+		pr_info("Memutil: Update delay=%uus - Ringbuffer will be full after %lld seconds",
+			infofile_data.update_interval,
 			LOGBUFFER_SIZE / (NSEC_PER_SEC / memutil_policy->freq_update_delay_ns));
 	}
+
+	pr_info("Memutil: Starting governor (core=%d)", policy->cpu);
 
 	mutex_lock(&memutil_init_mutex);
 	if (!logfile_info.tried_init) {
 		logfile_info.tried_init = true;
-		logfile_info.is_initialized = memutil_debugfs_init() == 0;
+		
+		logfile_info.is_initialized = memutil_debugfs_init(infofile_data) == 0;
 		if (!logfile_info.is_initialized) {
-			pr_warn("Failed to initialize memutil debugfs logfile");
+			pr_warn("Memutil: Failed to initialize memutil debugfs");
 		}
 	}
 	memutil_policy->logbuffer = memutil_open_ringbuffer(LOGBUFFER_SIZE);
 	if (!memutil_policy->logbuffer) {
-		pr_warn("Failed to create memutil logbuffer");
+		pr_warn("Memutil: Failed to create memutil logbuffer");
 	} else if (logfile_info.is_initialized) {
 		memutil_debugfs_register_ringbuffer(memutil_policy->logbuffer);
 	}
@@ -381,7 +398,7 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	unsigned int cpu;
 	struct memutil_policy *memutil_policy = policy->governor_data;
 
-	printk(KERN_INFO "Stopping memutil governor");
+	pr_info("Memutil: Stopping governor (core=%d)", policy->cpu);
 	// TODO
 	//
 	mutex_lock(&memutil_init_mutex);
@@ -404,7 +421,7 @@ static void memutil_stop(struct cpufreq_policy *policy)
 
 static void memutil_limits(struct cpufreq_policy *policy)
 {
-	printk(KERN_INFO "memutil limits changed");
+	pr_info("Memutil: Limits changed (core=%d)", policy->cpu);
 	// TODO
 }
 
