@@ -363,6 +363,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 	if (!logfile_info.tried_init) {
 		logfile_info.tried_init = true;
 		
+		infofile_data.core_count = num_online_cpus(); // cores available to scheduler
 		logfile_info.is_initialized = memutil_debugfs_init(infofile_data) == 0;
 		if (!logfile_info.is_initialized) {
 			pr_warn("Memutil: Failed to initialize memutil debugfs");
