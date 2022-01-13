@@ -93,7 +93,7 @@ step_log() {
 
 exit_script() {
     step_log
-    echo -n "Copy-log terminated"
+    echo "Copy-log terminated"
     exit
 }
 
