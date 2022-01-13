@@ -6,7 +6,7 @@
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 
-#include "memutil_debugfs.h"
+#include "memutil_debugfs_log.h"
 
 static void memutil_output_element(struct memutil_perf_data *element, bool write_logfile)
 {
@@ -14,10 +14,10 @@ static void memutil_output_element(struct memutil_perf_data *element, bool write
 	size_t bytes_written;
 
 	if (!write_logfile) {
-		pr_info("CPU[%u]: At: %llu misses: %llu, references: %llu", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
+		pr_info("Memutil: CPU[%u]: at=%llu misses=%llu, references=%llu", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
 		return;
 	}
-	bytes_written = snprintf(text, sizeof(text), "%u,%llu,%llu,%llu\n", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
+	bytes_written = scnprintf(text, sizeof(text), "%u,%llu,%llu,%llu\n", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
 	memutil_debugfs_append_to_logfile(text, bytes_written);
 }
 
@@ -43,13 +43,13 @@ struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size)
 	size_t alloc_size = sizeof(struct memutil_ringbuffer);
 	buffer = (struct memutil_ringbuffer *) kmalloc(alloc_size, GFP_KERNEL | GFP_NOWAIT);
 	if (!buffer) {
-		pr_warn("Failed to allocate buffer of size: %zu", alloc_size);
+		pr_warn("Memutil: Failed to allocate buffer of size: %zu", alloc_size);
 		return NULL;
 	}
 	alloc_size = sizeof(struct memutil_perf_data) * buffer_size;
 	data = kvmalloc(alloc_size, GFP_KERNEL);
 	if (!data) {
-		pr_warn("Failed to allocate data-buffer of size: %zu", alloc_size);
+		pr_warn("Memutil: Failed to allocate data-buffer of size: %zu", alloc_size);
 		kfree(buffer);
 		return NULL;
 	}
@@ -100,13 +100,17 @@ int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer)
 	alloc_size = sizeof(struct memutil_perf_data) * buffer->size;
 	buffer_copy.data = kvmalloc(alloc_size, GFP_KERNEL);
 	if (!buffer_copy.data) {
-		pr_warn("Failed to allocate memory for ringbuffer copy");
+		pr_warn("Memutil: Failed to allocate memory for ringbuffer copy");
 		return -1;
 	}
 	buffer_copy.size = buffer->size;
 
 	raw_spin_lock(&buffer->lock);
-	memcpy(buffer_copy.data, buffer->data, buffer->had_wraparound ? alloc_size : (buffer->insert_offset*sizeof(struct memutil_perf_data)));
+	memcpy(
+		buffer_copy.data,
+		buffer->data,
+		buffer->had_wraparound ? alloc_size : (buffer->insert_offset*sizeof(struct memutil_perf_data))
+	);
 	buffer_copy.had_wraparound = buffer->had_wraparound;
 	buffer_copy.insert_offset = buffer->insert_offset;
 	clear_buffer(buffer);

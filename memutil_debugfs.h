@@ -3,11 +3,9 @@
 
 #include <linux/types.h>
 
-struct memutil_ringbuffer;
+#include "memutil_debugfs_info.h"
 
-int memutil_debugfs_init(void);
+int memutil_debugfs_init(const struct memutil_infofile_data infofile_data);
 int memutil_debugfs_exit(void);
-int memutil_debugfs_append_to_logfile(char *buffer, size_t buffer_size);
-int memutil_debugfs_register_ringbuffer(struct memutil_ringbuffer *buffer);
 
 #endif
