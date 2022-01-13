@@ -11,7 +11,8 @@ static struct debugfs_blob_wrapper *infofile_data_blob;
 
 static char const *output_fmtstr =
     "core_count=%u\n"
-    "update_interval=%u\n";
+    "update_interval=%u\n"
+    "logbuffer_size=%u\n";
 
 int init_infofile_data(
     struct memutil_infofile_data data
@@ -19,7 +20,7 @@ int init_infofile_data(
     size_t nbytes = snprintf(
         NULL, 0,
         output_fmtstr,
-        data.core_count, data.update_interval
+        data.core_count, data.update_interval, data.logbuffer_size
     ) + 1; /* +1 for the '\0' */
     infofile_data = kmalloc(nbytes, GFP_KERNEL);
     if (!infofile_data) {
@@ -28,7 +29,7 @@ int init_infofile_data(
     return scnprintf(
         infofile_data, nbytes,
         output_fmtstr,
-        data.core_count, data.update_interval
+        data.core_count, data.update_interval, data.logbuffer_size
     );
 }
 
