@@ -10,7 +10,7 @@
 
 static void memutil_output_element(struct memutil_perf_data *element, bool write_logfile)
 {
-	char text[80]; //25 text chars + rest numbers
+	char text[80];
 	size_t bytes_written;
 
 	if (!write_logfile) {
