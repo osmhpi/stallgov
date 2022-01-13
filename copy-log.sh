@@ -74,17 +74,14 @@ then
     clear_logs $OUTPUT_DIR $CORE_NUMBER
 fi
 
-echo "Running"
-while true
-do
-    sleep $INTERVAL
+step_log() {
     echo -n "."
     if [ ! -e "$SOURCE_FILE" ]
     then
         echo "Source file missing"
-        continue
+        return
     fi
-    
+
     cp $SOURCE_FILE $OUTPUT_DIR/log-current.txt
     cat $OUTPUT_DIR/log-current.txt >> $OUTPUT_DIR/log.txt
     for i in $(seq 0 1 $((CORE_NUMBER-1)))
@@ -92,6 +89,21 @@ do
         copy_log_part $OUTPUT_DIR/log-current.txt $i $OUTPUT_DIR
     done
     rm $OUTPUT_DIR/log-current.txt
+}
+
+exit_script() {
+    step_log
+    echo -n "Copy-log terminated"
+    exit
+}
+
+trap exit_script SIGINT SIGTERM
+
+echo "Running"
+while true
+do
+    sleep $INTERVAL
+    step_log
 done
 
 exit 0
