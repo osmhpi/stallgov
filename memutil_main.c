@@ -19,6 +19,7 @@
 #include "pmu_events.h"
 #include "memutil_debugfs_log.h"
 #include "memutil_debugfs_info.h"
+#include "memutil_perf_read_local.h"
 
 #define LOGBUFFER_SIZE 2000
 
@@ -65,13 +66,17 @@ static struct memutil_logfile_info logfile_info = {
 static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
 static struct pmu_events_map *events_map = NULL;
-static const char *event_names[PERF_EVENT_COUNT] = {
-	"mem_inst_retired.all_loads",
-	"mem_inst_retired.all_stores",
-	"inst_retired.any"
-};
 
-//MODULE_PARM(event_names, "3-3s");
+static char *event_name1 = "mem_inst_retired.all_loads";
+static char *event_name2 = "mem_inst_retired.all_stores";
+static char *event_name3 = "inst_retired.any";
+
+module_param(event_name1, charp, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(event_name1, "First perf counter name");
+module_param(event_name2, charp, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(event_name2, "Second perf counter name");
+module_param(event_name3, charp, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(event_name3, "Third perf counter name");
 
 static void memutil_log_data(u64 time, u64 values[PERF_EVENT_COUNT], unsigned int cpu, struct memutil_ringbuffer *logbuffer)
 {
@@ -96,7 +101,7 @@ static int memutil_read_perf_event(struct memutil_policy *policy, int event_inde
 	u64 enabled_time;
 	u64 running_time;
 
-	perf_result = perf_event_read_local(
+	perf_result = memutil_perf_event_read_local(
 		policy->events[event_index],
 		&absolute_value,
 		&enabled_time,
@@ -362,6 +367,12 @@ static long __must_check memutil_allocate_perf_counters(struct memutil_policy *p
 {
 	int i;
 	struct perf_event *perf_event;
+	char *event_names[PERF_EVENT_COUNT] = {
+		event_name1,
+		event_name2,
+		event_name3
+	};
+
 	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
 		perf_event = memutil_allocate_named_perf_counter(
 			policy,
