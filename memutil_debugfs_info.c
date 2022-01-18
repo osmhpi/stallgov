@@ -20,7 +20,7 @@ int init_infofile_data(
     size_t nbytes = snprintf(
         NULL, 0,
         output_fmtstr,
-        data.core_count, data.update_interval, data.logbuffer_size
+        data.core_count, data.update_interval_ms, data.logbuffer_size
     ) + 1; /* +1 for the '\0' */
     infofile_data = kmalloc(nbytes, GFP_KERNEL);
     if (!infofile_data) {
@@ -29,7 +29,7 @@ int init_infofile_data(
     return scnprintf(
         infofile_data, nbytes,
         output_fmtstr,
-        data.core_count, data.update_interval, data.logbuffer_size
+        data.core_count, data.update_interval_ms, data.logbuffer_size
     );
 }
 
