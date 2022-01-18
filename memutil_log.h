@@ -6,8 +6,9 @@
 
 struct memutil_perf_data {
 	u64 timestamp;
-	u64 cache_misses;
-	u64 cache_references;
+	u64 value1;
+	u64 value2;
+	u64 value3;
 	unsigned int cpu;
 };
 

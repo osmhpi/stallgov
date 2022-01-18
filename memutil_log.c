@@ -10,14 +10,17 @@
 
 static void memutil_output_element(struct memutil_perf_data *element, bool write_logfile)
 {
-	char text[80];
-	size_t bytes_written;
+	char text[120];
 
 	if (!write_logfile) {
-		pr_info("Memutil: CPU[%u]: at=%llu misses=%llu, references=%llu", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
+		pr_info("Memutil: CPU[%u]: at=%llu value1=%llu, value2=%llu, value3=%llu",
+			element->cpu, element->timestamp, element->value1,
+			element->value2, element->value3);
 		return;
 	}
-	bytes_written = scnprintf(text, sizeof(text), "%u,%llu,%llu,%llu\n", element->cpu, element->timestamp, element->cache_misses, element->cache_references);
+	scnprintf(text, sizeof(text), "%u,%llu,%llu,%llu,%llu\n", element->cpu,
+		  element->timestamp, element->value1, element->value2,
+		  element->value3);
 	memutil_debugfs_append_to_logfile(text, bytes_written);
 }
 
