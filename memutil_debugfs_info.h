@@ -6,7 +6,7 @@
 
 struct memutil_infofile_data {
     unsigned int core_count;
-    unsigned int update_interval; // in ms
+    unsigned int update_interval_ms; // in ms
     unsigned int logbuffer_size;
 };
 

@@ -521,8 +521,8 @@ static int memutil_start(struct cpufreq_policy *policy)
 	pr_info("Memutil: Starting governor (core=%d)", policy->cpu);
 
 	memutil_policy->last_freq_update_time	= 0;
-	memutil_policy->freq_update_delay_ns	= max(NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy), 5000000L);
-	infofile_data.update_interval = memutil_policy->freq_update_delay_ns / 1000;
+	memutil_policy->freq_update_delay_ns	= max(NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy), 5 * NSEC_PER_MSEC);
+	infofile_data.update_interval_ms = memutil_policy->freq_update_delay_ns / NSEC_PER_MSEC;
 	if (policy->cpu == 0) {
 		pr_info("Memutil: Info\n"
 			"Populatable CPUs=%d\n"
@@ -534,9 +534,9 @@ static int memutil_start(struct cpufreq_policy *policy)
 			num_online_cpus(),
 			num_active_cpus()
 		);
-		pr_info("Memutil: Update delay=%uus - Ringbuffer will be full after %lld seconds",
-			infofile_data.update_interval,
-			LOGBUFFER_SIZE / (NSEC_PER_SEC / memutil_policy->freq_update_delay_ns));
+		pr_info("Memutil: Update delay=%ums - Ringbuffer will be full after %ld seconds",
+			infofile_data.update_interval_ms,
+			LOGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data.update_interval_ms));
 	}
 
 	mutex_lock(&memutil_init_mutex);
