@@ -217,9 +217,7 @@ struct pmu_event *find_event(const char *event_name)
 	int i = 0;
 	if(!events_map)
 		return NULL;
-	debug_info("Memutil: Searching event %s in events map", event_name);
 	for (;;) {
-		debug_info("Memutil: Searching in event map at %d", i);
 		event = &events_map->table[i++];
 		if (!event->name && !event->event && !event->desc) {
 			event = NULL;
