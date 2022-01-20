@@ -53,15 +53,7 @@ struct memutil_cpu {
 	u64			last_update;
 };
 
-struct memutil_logfile_info {
-	bool is_initialized;
-	bool tried_init;
-};
-
-static struct memutil_logfile_info logfile_info = {
-	.is_initialized = false,
-	.tried_init = false
-};
+static bool is_logifle_initialized = false;
 
 static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
@@ -176,9 +168,9 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 	kfree(memutil_policy);
 }
 
-static void setup_events_map(void)
+static int setup_events_map(void)
 {
-	int i;
+	int i, return_value;
 	char* cpuid = memutil_get_cpuid_str();
 	if (!cpuid) {
 		pr_warn("Memutil: Failed to assign pmu events map");
@@ -188,16 +180,20 @@ static void setup_events_map(void)
 	for (;;) {
 		events_map = &memutil_pmu_events_map[i++];
 		if (!events_map->table) {
+			pr_warn("Did not find pmu events map for cpuid %s", cpuid);
 			events_map = NULL;
+			return_value = -1;
 			break;
 		}
 
 		if (!memutil_strcmp_cpuid_str(events_map->cpuid, cpuid)) {
 			pr_info("Found table %s for cpuid %s", events_map->cpuid, cpuid);
+			return_value = 0;
 			break;
 		}
 	}
 	kfree(cpuid);
+	return return_value;
 }
 
 static void teardown_events_map(void)
@@ -499,19 +495,67 @@ static void memutil_update_single_frequency(
 
 static void cleanup_fail_allocate_perf_counters(struct memutil_policy *memutil_policy)
 {
-	mutex_lock(&memutil_init_mutex);
-	if (logfile_info.is_initialized) {
-		memutil_debugfs_exit();
-		logfile_info.is_initialized = false;
-		logfile_info.tried_init = false;
+
+}
+
+static void print_start_info(struct memutil_policy *policy, struct memutil_infofile_data *infofile_data)
+{
+	pr_info("Memutil: Starting governor (core=%d)", policy->cpu);
+	if (policy->cpu != 0) {
+		return;
 	}
-	if (memutil_policy->policy->cpu == 0) {
-		teardown_events_map();
+	pr_info("Memutil: Info\n"
+		"Populatable CPUs=%d\n"
+		"Populated CPUs=%d\n"
+		"CPUs available to scheduler=%d\n"
+		"CPUs available to migration=%d\n",
+		num_possible_cpus(),
+		num_present_cpus(),
+		num_online_cpus(),
+		num_active_cpus()
+		);
+	pr_info("Memutil: Update delay=%ums - Ringbuffer will be full after %ld seconds",
+		infofile_data->update_interval_ms,
+		LOGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data->update_interval_ms));
+}
+
+static void start_logging(struct memutil_policy *policy, struct memutil_infofile_data *infofile_data)
+{
+	mutex_lock(&memutil_init_mutex);
+	if (policy->cpu == 0) {
+		infofile_data->core_count = num_online_cpus(); // cores available to scheduler
+		infofile_data->logbuffer_size = LOGBUFFER_SIZE;
+
+		is_logfile_initialized = memutil_debugfs_init(infofile_data) == 0;
+		if (!is_logfile_initialized) {
+			pr_warn("Memutil: Failed to initialize memutil debugfs");
+		}
+	}
+	memutil_policy->logbuffer = memutil_open_ringbuffer(LOGBUFFER_SIZE);
+	if (!memutil_policy->logbuffer) {
+		pr_warn("Memutil: Failed to create memutil logbuffer");
+	} else if (is_logfile_initialized) {
+		memutil_debugfs_register_ringbuffer(memutil_policy->logbuffer);
 	}
 	mutex_unlock(&memutil_init_mutex);
+}
 
-	if (memutil_policy->logbuffer) {
-		memutil_close_ringbuffer(memutil_policy->logbuffer);
+static void setup_per_cpu_data(struct cpufreq_policy *policy, struct memutil_policy *memutil_policy)
+{
+	for_each_cpu(cpu, policy->cpus) {
+		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
+
+		memset(mu_cpu, 0, sizeof(*mu_cpu));
+		mu_cpu->cpu 		= cpu;
+		mu_cpu->memutil_policy	= memutil_policy;
+	}
+}
+
+static void install_update_hook(struct cpufreq_policy *policy)
+{
+	for_each_cpu(cpu, policy->cpus) {
+		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
+		cpufreq_add_update_util_hook(cpu, &mu_cpu->update_util, memutil_update_single_frequency);
 	}
 }
 
@@ -521,72 +565,46 @@ static int memutil_start(struct cpufreq_policy *policy)
 	int return_value;
 	struct memutil_infofile_data infofile_data;
 	struct memutil_policy *memutil_policy = policy->governor_data;
-	pr_info("Memutil: Starting governor (core=%d)", policy->cpu);
 
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= max(NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy), 5 * NSEC_PER_MSEC);
 	infofile_data.update_interval_ms = memutil_policy->freq_update_delay_ns / NSEC_PER_MSEC;
+
+	print_start_info(memutil_policy, &infofile_data);
+
+	start_logging(memutil_policy, &infofile_data);
 	if (policy->cpu == 0) {
-		pr_info("Memutil: Info\n"
-			"Populatable CPUs=%d\n"
-			"Populated CPUs=%d\n"
-			"CPUs available to scheduler=%d\n"
-			"CPUs available to migration=%d\n",
-			num_possible_cpus(),
-			num_present_cpus(),
-			num_online_cpus(),
-			num_active_cpus()
-		);
-		pr_info("Memutil: Update delay=%ums - Ringbuffer will be full after %ld seconds",
-			infofile_data.update_interval_ms,
-			LOGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data.update_interval_ms));
-	}
-
-	mutex_lock(&memutil_init_mutex);
-	if (!logfile_info.tried_init) {
-		logfile_info.tried_init = true;
-		
-		infofile_data.core_count = num_online_cpus(); // cores available to scheduler
-		infofile_data.logbuffer_size = LOGBUFFER_SIZE;
-
-		logfile_info.is_initialized = memutil_debugfs_init(infofile_data) == 0;
-		if (!logfile_info.is_initialized) {
-			pr_warn("Memutil: Failed to initialize memutil debugfs");
+		if (!setup_events_map()) {
+			return_value = -1;
+			goto fail_events_map;
 		}
 	}
-	memutil_policy->logbuffer = memutil_open_ringbuffer(LOGBUFFER_SIZE);
-	if (!memutil_policy->logbuffer) {
-		pr_warn("Memutil: Failed to create memutil logbuffer");
-	} else if (logfile_info.is_initialized) {
-		memutil_debugfs_register_ringbuffer(memutil_policy->logbuffer);
-	}
-	if (policy->cpu == 0) {
-		setup_events_map();
-	}
-	mutex_unlock(&memutil_init_mutex);
 
 	return_value = (int) memutil_allocate_perf_counters(memutil_policy);
 	if (unlikely(return_value != 0)) {
-		cleanup_fail_allocate_perf_counters(memutil_policy);
-		return return_value;
+		goto fail_allocate_perf_counters;
 	}
-
-
-	for_each_cpu(cpu, policy->cpus) {
-		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
-
-		memset(mu_cpu, 0, sizeof(*mu_cpu));
-		mu_cpu->cpu 		= cpu;
-		mu_cpu->memutil_policy	= memutil_policy;
-	}
-
-	for_each_cpu(cpu, policy->cpus) {
-		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
-
-		cpufreq_add_update_util_hook(cpu, &mu_cpu->update_util, memutil_update_single_frequency);
-	}
+	setup_per_cpu_data(policy, memutil_policy);
+	install_update_hook(policy);
 
 	return 0;
+
+fail_allocate_perf_counters:
+	if (memutil_policy->policy->cpu == 0) {
+		teardown_events_map();
+	}
+fail_events_map:
+	mutex_lock(&memutil_init_mutex);
+	if (is_logfile_initialized) {
+		memutil_debugfs_exit();
+		is_logfile_initialized = false;
+	}
+	mutex_unlock(&memutil_init_mutex);
+
+	if (memutil_policy->logbuffer) {
+		memutil_close_ringbuffer(memutil_policy->logbuffer);
+	}
+	return return_value;
 }
 
 static void memutil_stop(struct cpufreq_policy *policy)
@@ -598,10 +616,9 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	// TODO
 	//
 	mutex_lock(&memutil_init_mutex);
-	if (logfile_info.is_initialized) {
+	if (is_logfile_initialized) {
 		memutil_debugfs_exit();
-		logfile_info.is_initialized = false;
-		logfile_info.tried_init = false;
+		is_logfile_initialized = false;
 	}
 	if (policy->cpu == 0) {
 		teardown_events_map();
