@@ -6,6 +6,7 @@
 #include <linux/vmalloc.h>
 
 #include "memutil_log.h"
+#include "memutil_debug_log.h"
 
 static struct dentry *log_file = NULL;
 
@@ -102,7 +103,7 @@ int memutil_debugfs_log_exit(struct dentry *root_dir)
 
 int memutil_debugfs_register_ringbuffer(struct memutil_ringbuffer *buffer)
 {
-	pr_info("Memutil: Registering ringbuffer in DebugFS");
+	debug_info("Memutil: Registering ringbuffer in DebugFS");
 	if (unlikely(ringbuffers.count >= MAX_RINGBUFFER_COUNT)) {
 		pr_warn("Memutil: Cannot register additional memutil ringbuffer");
 		return -1;
