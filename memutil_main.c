@@ -14,6 +14,7 @@
 #include <linux/err.h>
 
 #include "memutil_log.h"
+#include "memutil_debug_log.h"
 #include "memutil_debugfs.h"
 #include "pmu_cpuid_helper.h"
 #include "pmu_events.h"
@@ -172,22 +173,23 @@ static int setup_events_map(void)
 {
 	int i, return_value;
 	char* cpuid = memutil_get_cpuid_str();
+	debug_info("Memutil: Setting up events map");
 	if (!cpuid) {
-		pr_warn("Memutil: Failed to assign pmu events map");
-		return;
+		pr_warn("Memutil: Failed to read CPUID");
+		return -1;
 	}
 	i = 0;
 	for (;;) {
 		events_map = &memutil_pmu_events_map[i++];
 		if (!events_map->table) {
-			pr_warn("Did not find pmu events map for cpuid %s", cpuid);
+			pr_warn("Memutil: Did not find pmu events map for CPUID=\"%s\"", cpuid);
 			events_map = NULL;
-			return_value = -1;
+			return_value = -2;
 			break;
 		}
 
 		if (!memutil_strcmp_cpuid_str(events_map->cpuid, cpuid)) {
-			pr_info("Found table %s for cpuid %s", events_map->cpuid, cpuid);
+			debug_info("Memutil: Found table %s for CPUID=\"%s\"", events_map->cpuid, cpuid);
 			return_value = 0;
 			break;
 		}
@@ -205,6 +207,8 @@ struct pmu_event *find_event(const char *event_name)
 {
 	struct pmu_event *event = NULL;
 	int i = 0;
+	if(!events_map)
+		return NULL;
 	for (;;) {
 		event = &events_map->table[i++];
 		if (!event->name && !event->event && !event->desc) {
@@ -319,6 +323,7 @@ static struct perf_event * __must_check memutil_allocate_perf_counter_for(struct
 	perf_attr.exclude_kernel = 1;
 	perf_attr.exclude_hv = 1;
 
+	debug_info("Memutil: Perf create kernel counter");
 	perf_event = perf_event_create_kernel_counter(
 		&perf_attr,
 		policy->policy->cpu,
@@ -347,15 +352,19 @@ static struct perf_event *memutil_allocate_named_perf_counter(struct memutil_pol
 	perf_event_type = 4; //hardcoded type that is usually cpu pmu
 	perf_event_config = 0;
 	perf_event_period = 0;
+
+	debug_info("Memutil: Perf counter searching %s", counter_name);
 	event = find_event(counter_name);
 	if (!event) {
-		pr_warn("Failed to find event for given counter name %s", counter_name);
+		pr_warn("Memutil: Failed to find event for given counter name %s", counter_name);
 		return ERR_PTR(-1);
 	}
+	debug_info("Memutil: Perf counter parsing %s", counter_name);
 	if (parse_event(event, &perf_event_config, &perf_event_period)) {
-		pr_warn("Failed to parse event for given counter name %s", counter_name);
+		pr_warn("Memutil: Failed to parse event for given counter name %s", counter_name);
 		return ERR_PTR(-1);
 	}
+	debug_info("Memutil: Perf counter allocating %s", counter_name);
 	return memutil_allocate_perf_counter_for(policy, perf_event_type, perf_event_config);
 }
 
@@ -369,16 +378,20 @@ static long __must_check memutil_allocate_perf_counters(struct memutil_policy *p
 		event_name3
 	};
 
+	debug_info("Memutil: Allocating perf counters");
 	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
+		debug_info("Memutil: Allocate perf counter %d", i);
 		perf_event = memutil_allocate_named_perf_counter(
 			policy,
 			event_names[i]);
+		debug_info("Memutil: Allocated perf counter %d", i);
 		if(unlikely(IS_ERR(perf_event))) {
 			pr_err("Memutil: Failed to allocate perf event %s: %pe", event_names[i], perf_event);
 			goto cleanup;
 		}
 		policy->events[i] = perf_event;
 	}
+	debug_info("Memutil: Allocated perf counters");
 	return 0;
 
 cleanup:
@@ -521,6 +534,7 @@ static void print_start_info(struct memutil_policy *policy, struct memutil_infof
 
 static void start_logging(struct memutil_policy *policy, struct memutil_infofile_data *infofile_data)
 {
+	debug_info("Memutil: Entering start logging");
 	mutex_lock(&memutil_init_mutex);
 	if (policy->cpu == 0) {
 		infofile_data->core_count = num_online_cpus(); // cores available to scheduler
@@ -538,10 +552,12 @@ static void start_logging(struct memutil_policy *policy, struct memutil_infofile
 		memutil_debugfs_register_ringbuffer(memutil_policy->logbuffer);
 	}
 	mutex_unlock(&memutil_init_mutex);
+	debug_info("Memutil: Leaving start logging");
 }
 
 static void setup_per_cpu_data(struct cpufreq_policy *policy, struct memutil_policy *memutil_policy)
 {
+	debug_info("Memutil: Setting up per CPU data");
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
 
@@ -549,10 +565,12 @@ static void setup_per_cpu_data(struct cpufreq_policy *policy, struct memutil_pol
 		mu_cpu->cpu 		= cpu;
 		mu_cpu->memutil_policy	= memutil_policy;
 	}
+	debug_info("Memutil: Finished setting up per CPU data");
 }
 
 static void install_update_hook(struct cpufreq_policy *policy)
 {
+	debug_info("Memutil: Setting up CPU update hooks");
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
 		cpufreq_add_update_util_hook(cpu, &mu_cpu->update_util, memutil_update_single_frequency);
@@ -587,6 +605,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 	setup_per_cpu_data(policy, memutil_policy);
 	install_update_hook(policy);
 
+	pr_info("Memutil: Governor init done");
 	return 0;
 
 fail_allocate_perf_counters:
