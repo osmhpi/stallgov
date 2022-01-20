@@ -54,7 +54,7 @@ struct memutil_cpu {
 	u64			last_update;
 };
 
-static bool is_logifle_initialized = false;
+static bool is_logfile_initialized = false;
 
 static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
@@ -506,15 +506,10 @@ static void memutil_update_single_frequency(
 	memutil_policy->last_freq_update_time = time;
 }
 
-static void cleanup_fail_allocate_perf_counters(struct memutil_policy *memutil_policy)
+static void print_start_info(struct memutil_policy *memutil_policy, struct memutil_infofile_data *infofile_data)
 {
-
-}
-
-static void print_start_info(struct memutil_policy *policy, struct memutil_infofile_data *infofile_data)
-{
-	pr_info("Memutil: Starting governor (core=%d)", policy->cpu);
-	if (policy->cpu != 0) {
+	pr_info("Memutil: Starting governor (core=%d)", memutil_policy->policy->cpu);
+	if (memutil_policy->policy->cpu != 0) {
 		return;
 	}
 	pr_info("Memutil: Info\n"
@@ -532,15 +527,15 @@ static void print_start_info(struct memutil_policy *policy, struct memutil_infof
 		LOGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data->update_interval_ms));
 }
 
-static void start_logging(struct memutil_policy *policy, struct memutil_infofile_data *infofile_data)
+static void start_logging(struct memutil_policy *memutil_policy, struct memutil_infofile_data *infofile_data)
 {
 	debug_info("Memutil: Entering start logging");
 	mutex_lock(&memutil_init_mutex);
-	if (policy->cpu == 0) {
+	if (memutil_policy->policy->cpu == 0) {
 		infofile_data->core_count = num_online_cpus(); // cores available to scheduler
 		infofile_data->logbuffer_size = LOGBUFFER_SIZE;
 
-		is_logfile_initialized = memutil_debugfs_init(infofile_data) == 0;
+		is_logfile_initialized = memutil_debugfs_init(*infofile_data) == 0;
 		if (!is_logfile_initialized) {
 			pr_warn("Memutil: Failed to initialize memutil debugfs");
 		}
@@ -557,6 +552,7 @@ static void start_logging(struct memutil_policy *policy, struct memutil_infofile
 
 static void setup_per_cpu_data(struct cpufreq_policy *policy, struct memutil_policy *memutil_policy)
 {
+	unsigned int cpu;
 	debug_info("Memutil: Setting up per CPU data");
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
@@ -570,6 +566,7 @@ static void setup_per_cpu_data(struct cpufreq_policy *policy, struct memutil_pol
 
 static void install_update_hook(struct cpufreq_policy *policy)
 {
+	unsigned int cpu;
 	debug_info("Memutil: Setting up CPU update hooks");
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
@@ -579,7 +576,6 @@ static void install_update_hook(struct cpufreq_policy *policy)
 
 static int memutil_start(struct cpufreq_policy *policy)
 {
-	unsigned int cpu;
 	int return_value;
 	struct memutil_infofile_data infofile_data;
 	struct memutil_policy *memutil_policy = policy->governor_data;
@@ -592,7 +588,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 	start_logging(memutil_policy, &infofile_data);
 	if (policy->cpu == 0) {
-		if (!setup_events_map()) {
+		if (setup_events_map() != 0) {
 			return_value = -1;
 			goto fail_events_map;
 		}
