@@ -45,6 +45,8 @@ struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size)
 	struct memutil_ringbuffer* buffer;
 	void* data;
 	size_t alloc_size = sizeof(struct memutil_ringbuffer);
+	
+	pr_info("Memutil: Initializing ringbuffer");
 	buffer = (struct memutil_ringbuffer *) kmalloc(alloc_size, GFP_KERNEL | GFP_NOWAIT);
 	if (!buffer) {
 		pr_warn("Memutil: Failed to allocate buffer of size: %zu", alloc_size);
@@ -63,6 +65,7 @@ struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size)
 	buffer->insert_offset = 0;
 	buffer->had_wraparound = 0;
 
+	pr_info("Memutil: Ringbuffer ready");
 	return buffer;
 }
 

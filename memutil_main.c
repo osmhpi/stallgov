@@ -21,6 +21,8 @@
 #include "memutil_debugfs_info.h"
 #include "memutil_perf_read_local.h"
 
+#define DO_DEBUG_OUTPUT true
+
 #define LOGBUFFER_SIZE 2000
 
 #define AGGREGATE_LOG 0
@@ -77,6 +79,13 @@ module_param(event_name2, charp, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(event_name2, "Second perf counter name");
 module_param(event_name3, charp, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(event_name3, "Third perf counter name");
+
+#ifdef DO_DEBUG_OUTPUT
+#define debug_info(fmt, ...) \
+	pr_info(fmt, ##__VA_ARGS__)
+#else
+#define debug_info(fmt, ...) 
+#endif
 
 static void memutil_log_data(u64 time, u64 values[PERF_EVENT_COUNT], unsigned int cpu, struct memutil_ringbuffer *logbuffer)
 {
@@ -179,7 +188,9 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 static void setup_events_map(void)
 {
 	int i;
-	char* cpuid = memutil_get_cpuid_str();
+	char* cpuid;
+	pr_info("Memutil: Setting up events map");
+	cpuid = memutil_get_cpuid_str();
 	if (!cpuid) {
 		pr_warn("Memutil: Failed to assign pmu events map");
 		return;
@@ -193,9 +204,12 @@ static void setup_events_map(void)
 		}
 
 		if (!memutil_strcmp_cpuid_str(events_map->cpuid, cpuid)) {
-			pr_info("Found table %s for cpuid %s", events_map->cpuid, cpuid);
+			pr_info("Memutil: Found table %s for cpuid %s", events_map->cpuid, cpuid);
 			break;
 		}
+	}
+	if(!events_map) {
+		pr_warn("Memutil: Events map is still NULL");
 	}
 	kfree(cpuid);
 }
@@ -209,7 +223,9 @@ struct pmu_event *find_event(const char *event_name)
 {
 	struct pmu_event *event = NULL;
 	int i = 0;
+	pr_info("Memutil: Find event %s 1", event_name);
 	for (;;) {
+	pr_info("Memutil: Find event [%d]", i);
 		event = &events_map->table[i++];
 		if (!event->name && !event->event && !event->desc) {
 			event = NULL;
@@ -219,6 +235,7 @@ struct pmu_event *find_event(const char *event_name)
 			break;
 		}
 	}
+	pr_info("Memutil: Find event %s 2", event_name);
 	return event;
 }
 
@@ -323,6 +340,7 @@ static struct perf_event * __must_check memutil_allocate_perf_counter_for(struct
 	perf_attr.exclude_kernel = 1;
 	perf_attr.exclude_hv = 1;
 
+	pr_info("Memutil: Perf create kernel counter");
 	perf_event = perf_event_create_kernel_counter(
 		&perf_attr,
 		policy->policy->cpu,
@@ -351,15 +369,19 @@ static struct perf_event *memutil_allocate_named_perf_counter(struct memutil_pol
 	perf_event_type = 4; //hardcoded type that is usually cpu pmu
 	perf_event_config = 0;
 	perf_event_period = 0;
+
+	pr_info("Memutil: Perf counter searching %s", counter_name);
 	event = find_event(counter_name);
 	if (!event) {
 		pr_warn("Failed to find event for given counter name %s", counter_name);
 		return ERR_PTR(-1);
 	}
+	pr_info("Memutil: Perf counter parsing %s", counter_name);
 	if (parse_event(event, &perf_event_config, &perf_event_period)) {
 		pr_warn("Failed to parse event for given counter name %s", counter_name);
 		return ERR_PTR(-1);
 	}
+	pr_info("Memutil: Perf counters allocating %s", counter_name);
 	return memutil_allocate_perf_counter_for(policy, perf_event_type, perf_event_config);
 }
 
@@ -373,16 +395,20 @@ static long __must_check memutil_allocate_perf_counters(struct memutil_policy *p
 		event_name3
 	};
 
+	pr_info("Memutil: Allocating perf counters");
 	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
+		pr_info("Memutil: Allocate named perf counter %d", i);
 		perf_event = memutil_allocate_named_perf_counter(
 			policy,
 			event_names[i]);
+		pr_info("Memutil: Allocated named perf counter%d", i);
 		if(unlikely(IS_ERR(perf_event))) {
 			pr_err("Memutil: Failed to allocate perf event %s: %pe", event_names[i], perf_event);
 			goto cleanup;
 		}
 		policy->events[i] = perf_event;
 	}
+	pr_info("Memutil: Allocated perf counters");
 	return 0;
 
 cleanup:
@@ -542,6 +568,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 			LOGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data.update_interval_ms));
 	}
 
+	pr_info("Memutil: Entering Init Mutex");
 	mutex_lock(&memutil_init_mutex);
 	if (!logfile_info.tried_init) {
 		logfile_info.tried_init = true;
@@ -563,6 +590,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 	if (policy->cpu == 0) {
 		setup_events_map();
 	}
+	pr_info("Memutil: Leaving Init Mutex");
 	mutex_unlock(&memutil_init_mutex);
 
 	return_value = (int) memutil_allocate_perf_counters(memutil_policy);
@@ -571,7 +599,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 		return return_value;
 	}
 
-
+	pr_info("Memutil: Setting up CPU memutil policies");
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
 
@@ -580,12 +608,14 @@ static int memutil_start(struct cpufreq_policy *policy)
 		mu_cpu->memutil_policy	= memutil_policy;
 	}
 
+	pr_info("Memutil: Setting up CPU update hooks");
 	for_each_cpu(cpu, policy->cpus) {
 		struct memutil_cpu *mu_cpu = &per_cpu(memutil_cpu_list, cpu);
 
 		cpufreq_add_update_util_hook(cpu, &mu_cpu->update_util, memutil_update_single_frequency);
 	}
 
+	pr_info("Memutil: Init done");
 	return 0;
 }
 
