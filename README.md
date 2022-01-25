@@ -2,24 +2,6 @@
 
 This module is based on the guide: https://thegeekstuff.com/2013/07/write-linux-kernel-module/
 
-## Prerequsites
-
-Unfortunately, as of the time of writing, you need a patched kernel.
-
-See [this page](https://kernelnewbies.org/KernelBuild) on how to compile & install your own kernel.
-
-For fedora, I recommend you follow [this guide](https://fedoraproject.org/wiki/Building_a_custom_kernel#Building_a_kernel_from_the_exploded_git_trees) and use the instructions under the *Building a kernel from the exploded git trees* section.
-
-Then add this line:
-
-```
-EXPORT_SYMBOL_GPL(perf_event_read_local);
-```
-
-After the definition of `perf_event_read_local` in `kernel/events/core.c` .
-
-At last, compile and install the new kernel.
-
 ## Dependencies 
 - Ubuntu
     - build-essential
@@ -57,7 +39,7 @@ vermagic:       5.15.5-100.fc34.x86_64 SMP mod_unload
 To insert the module, run: `sudo insmod memutil.ko`
 
 `cpupower frequency-info` should now list `memutil` as one of the available governors.
-You'll possibly have to disable intel_pstate first.
+If you have an intel cpu you likely have to disable intel_pstate first. See "Disabling intel_pstate".
 
 Switch to the governor by using `cpupower frequency-set -g memutil`.
 
@@ -65,6 +47,18 @@ Switch to the governor by using `cpupower frequency-set -g memutil`.
 Before removing the memutil kernel module, please switch back to another governor like schedutil.
 
 Then run `sudo rmmod memutil.ko` to remove the module from your kernel.
+
+### Disabling intel_pstate
+
+To disable intel_pstate add the kernel commandline parameter "intel_pstate=disable". This can be done temporarily by:
+    1. Restart your computer
+    2. During boot force the "GNU GRUB" menu to appear (e.g. by repeatedly pressing ESC)
+    3. Highlight the line which should be used for booting and press e to enter edit mode
+    4. Move to the line starting with "linux" and move the cursor to the end of that line.
+    5. Add a blank space and then insert the kernel command line parameter (e.g. "intel_pstate=disable")
+    6. Press Ctrl+X to boot the system with these changes.
+    7. As mentioned these changes are temporary, i.e. the adjustment to the command line will only affect this one boot and the changes to the command line
+       will not be there for the next boot.
 
 ## Output log
 You can view the debug output of memutil via `dmesg`.
