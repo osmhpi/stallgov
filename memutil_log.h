@@ -9,6 +9,7 @@ struct memutil_perf_data {
 	u64 value1;
 	u64 value2;
 	u64 value3;
+	unsigned int requested_freq;
 	unsigned int cpu;
 };
 

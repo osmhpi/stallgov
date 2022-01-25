@@ -31,13 +31,15 @@
 typedef char* key_value_pair_t[2];
 
 struct memutil_policy {
-	struct cpufreq_policy *policy;
+	struct cpufreq_policy	*policy;
 
 	u64			last_freq_update_time;
 	s64			freq_update_delay_ns;
 
 	struct perf_event	*events[PERF_EVENT_COUNT];
 	u64			last_event_value[PERF_EVENT_COUNT];
+
+	unsigned int		last_requested_freq;
 
 	struct memutil_ringbuffer *logbuffer;
 #if AGGREGATE_LOG
@@ -67,9 +69,9 @@ static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
 static struct pmu_events_map *events_map = NULL;
 
-static char *event_name1 = "mem_inst_retired.all_loads";
-static char *event_name2 = "mem_inst_retired.all_stores";
-static char *event_name3 = "inst_retired.any";
+static char *event_name1 = "inst_retired.any";
+static char *event_name2 = "cpu_clk_unhalted.thread";
+static char *event_name3 = "cycle_activity.stalls_mem_any";
 
 module_param(event_name1, charp, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(event_name1, "First perf counter name");
@@ -78,13 +80,14 @@ MODULE_PARM_DESC(event_name2, "Second perf counter name");
 module_param(event_name3, charp, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(event_name3, "Third perf counter name");
 
-static void memutil_log_data(u64 time, u64 values[PERF_EVENT_COUNT], unsigned int cpu, struct memutil_ringbuffer *logbuffer)
+static void memutil_log_data(u64 time, u64 values[PERF_EVENT_COUNT], unsigned int cpu, unsigned int requested_freq, struct memutil_ringbuffer *logbuffer)
 {
 	struct memutil_perf_data data = {
 		.timestamp = time,
 		.value1 = values[0],
 		.value2 = values[1],
 		.value3 = values[2],
+		.requested_freq = requested_freq,
 		.cpu = cpu
 	};
 	BUILD_BUG_ON_MSG(PERF_EVENT_COUNT != 3, "Function has to be adjusted for the PERF_EVENT_COUNT");
@@ -138,21 +141,81 @@ static void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 tim
 		memutil_read_perf_event(memutil_policy, i, &event_values[i]);
 	}
 
-	memutil_log_data(time, event_values, policy->cpu, memutil_policy->logbuffer);
+	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
 }
 
-void memutil_set_frequency(struct memutil_policy *memutil_policy, u64 time)
+int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int value)
 {
-	struct cpufreq_policy 	*policy = memutil_policy->policy;
+	struct cpufreq_policy	*policy = memutil_policy->policy;
 
-	memutil_log_perf_data(memutil_policy, time);
-
+	memutil_policy->last_requested_freq = value;
+	
 	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
-		cpufreq_driver_fast_switch(policy, policy->max);
+		cpufreq_driver_fast_switch(policy, value);
+		return 0;
 	}
 	else {
 		pr_err_ratelimited("Memutil: Cannot set frequency");
+		return 1;
 	}
+
+}
+
+void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
+{
+	u64			event_values[PERF_EVENT_COUNT];
+	u64			mem_stalls;
+	u64			cycles;
+	
+	u64			stalls_per_cycle;
+	unsigned int		new_frequency;
+
+	int			i;
+
+	struct cpufreq_policy 	*policy = memutil_policy->policy;
+
+	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
+		if (unlikely(!memutil_policy->events[i])) {
+			pr_err_ratelimited("Missing perf event %d", i);
+			memutil_set_frequency_to(memutil_policy, policy->max);
+			return;
+		}
+		if(unlikely(memutil_read_perf_event(memutil_policy, i, &event_values[i]) != 0)) {
+			memutil_set_frequency_to(memutil_policy, policy->max);
+			return;
+		}
+	}
+
+
+	mem_stalls = event_values[2];
+	cycles = event_values[1];
+
+	new_frequency = policy->max;
+	if(unlikely(cycles == 0)) {
+		new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
+
+		memutil_set_frequency_to(memutil_policy, new_frequency);
+	}
+	else {
+		stalls_per_cycle = (mem_stalls * 100) / (cycles);
+
+		// memory-bound
+		if (stalls_per_cycle > 75 /* % */) {
+			new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
+			memutil_set_frequency_to(memutil_policy, new_frequency);
+		}
+
+		// cpu-bound
+		if (stalls_per_cycle < 25 /* % */) {
+
+			new_frequency = min(policy->max, memutil_policy->last_requested_freq + (policy->max - policy->min) / 10);
+			memutil_set_frequency_to(memutil_policy, new_frequency);
+		}
+
+		// neither cpu, nor memory-bound, so we don't want to change the frequency
+	}
+
+	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
 }
 
 /********************** cpufreq governor interface *********************/
@@ -168,6 +231,7 @@ memutil_policy_alloc(struct cpufreq_policy *policy)
 	}
 
 	memutil_policy->policy = policy;
+	memutil_policy->last_requested_freq = policy->max;
 	return memutil_policy;
 }
 
@@ -493,7 +557,7 @@ static void memutil_update_single_frequency(
 		return;
 	}
 
-	memutil_set_frequency(memutil_policy, time);
+	memutil_update_frequency(memutil_policy, time);
 	memutil_policy->last_freq_update_time = time;
 }
 
@@ -526,6 +590,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= max(NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy), 5 * NSEC_PER_MSEC);
 	infofile_data.update_interval_ms = memutil_policy->freq_update_delay_ns / NSEC_PER_MSEC;
+
 	if (policy->cpu == 0) {
 		pr_info("Memutil: Info\n"
 			"Populatable CPUs=%d\n"
