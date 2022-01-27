@@ -297,13 +297,14 @@ static int parse_event_pair(char** pair, u64 *config, u64 *period)
 	//See arch/x86/events/perf_event.h struct x86_pmu_config for what bits are what or Intel Volume 3B documentation
 	if (!strcmp("event", pair[0])) {
 		*config |= (value & 0xFF);
-		return 0;
 	} else if (!strcmp("umask", pair[0])) {
 		*config |= (value & 0xFF) << 8;
 	} else if (!strcmp("cmask", pair[0])) {
 		*config |= (value & 0xFF) << 24;
 	} else if (!strcmp("edge", pair[0])) {
 		*config |= (value & 1) << 18;
+	} else if (!strcmp("inv", pair[0])) {
+		*config |= (value & 1) << 23;
 	} else if (!strcmp("any", pair[0])) {
 		pr_warn("Memutil: parse_event_pair: Any config value is used");
 		*config |= (value & 1) << 21;
@@ -311,6 +312,7 @@ static int parse_event_pair(char** pair, u64 *config, u64 *period)
 		*period = value;
 	} else {
 		pr_err("Memutil: parse_event_pair: Unknown key: %s", pair[0]);
+		return -2;
 	}
 	return 0;
 }
