@@ -1,5 +1,8 @@
 #!/bin/bash
 
+set -e
+set -x
+
 make
 if [ "$UID" -eq 0 ]; then
     cpupower frequency-set -g schedutil
