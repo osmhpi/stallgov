@@ -519,7 +519,6 @@ static void memutil_exit(struct cpufreq_policy *policy)
 
 	policy->governor_data = NULL;
 
-	memutil_release_perf_events(memutil_policy);
 	memutil_policy_free(memutil_policy);
 	cpufreq_disable_fast_switch(policy);
 }
@@ -697,6 +696,7 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	pr_info("Memutil: Stopping governor (core=%d)", policy->cpu);
 	// TODO
 	//
+	memutil_release_perf_events(memutil_policy);
 	mutex_lock(&memutil_init_mutex);
 	if (is_logfile_initialized) {
 		memutil_debugfs_exit();
