@@ -5,6 +5,7 @@
 #include "linux/printk.h"
 #include "linux/rcupdate.h"
 #include "linux/smp.h"
+#include "linux/types.h"
 #include <linux/module.h> // included for all kernel modules
 #include <linux/kernel.h> // included for KERN_INFO
 #include <linux/init.h> // included for __init and __exit macros
@@ -157,10 +158,12 @@ int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int
 void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 {
 	u64			event_values[PERF_EVENT_COUNT];
-	u64			mem_stalls;
-	u64			cycles;
+	s64			instructions;
+	s64			mem_stalls;
+	s64			cycles;
 	
-	u64			stalls_per_cycle;
+	s64			stalls_per_cycle;
+	s64			inst_per_cycle;
 	unsigned int		new_frequency;
 
 	int			i;
@@ -180,33 +183,38 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 	}
 
 
+	// this will cast the values into signed types which are easier to work with
 	mem_stalls = event_values[2];
 	cycles = event_values[1];
+	instructions = event_values[0];
 
 	new_frequency = policy->max;
 	if(unlikely(cycles == 0)) {
 		new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
 
-		memutil_set_frequency_to(memutil_policy, new_frequency);
 	}
 	else {
-		stalls_per_cycle = (mem_stalls * 100) / (cycles);
+		stalls_per_cycle = (mem_stalls * 100) / cycles;
+		inst_per_cycle = (instructions * 100) / cycles; // IPC
 
-		// memory-bound
-		if (stalls_per_cycle > 75 /* % */) {
+		// low IPC, as well as a high rate of memory stalls,
+		// we seem to be memory bound -> reduce frequency
+		if(inst_per_cycle < 40 /* % */ || (stalls_per_cycle - inst_per_cycle) > 10 /* % */) {
 			new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
-			memutil_set_frequency_to(memutil_policy, new_frequency);
 		}
-
-		// cpu-bound
-		if (stalls_per_cycle < 25 /* % */) {
-
+		// high IPC, or low stalls/cycle,
+		// we seem to be cpu-bound -> increase frequency
+		else if (inst_per_cycle >= 50 && (inst_per_cycle - stalls_per_cycle) > 10 /* % */) {
 			new_frequency = min(policy->max, memutil_policy->last_requested_freq + (policy->max - policy->min) / 10);
-			memutil_set_frequency_to(memutil_policy, new_frequency);
 		}
-
-		// neither cpu, nor memory-bound, so we don't want to change the frequency
+		else {
+			// frequency might be alright, but slowly increase it again, just to be sure
+			new_frequency = min(policy->max, memutil_policy->last_requested_freq + (policy->max - policy->min) / 100);
+		}
 	}
+	// We must always set the frequency, otherwise the cpufreq driver will
+	// start chooseing a frequency for us.
+	memutil_set_frequency_to(memutil_policy, new_frequency);
 
 	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
 }
