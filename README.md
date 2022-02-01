@@ -2,7 +2,9 @@
 
 This module is based on the guide: https://thegeekstuff.com/2013/07/write-linux-kernel-module/
 
-## Dependencies 
+
+## Dependencies
+
 - Ubuntu
     - build-essential
     - linux-headers-$(uname -r)
@@ -14,11 +16,15 @@ This module is based on the guide: https://thegeekstuff.com/2013/07/write-linux-
     - kernel-devel
     - kernel-headers
 
+
 ## Compilation
+
 To compile the module, simply run `make`.
 To remove the binaries, run `make clean`.
 
+
 ## Inserting & Removing the module
+
 After compilation, you can inspect the module by using `modinfo memutil.ko` (possibly with sudo).
 
 The output should look something like this:
@@ -35,7 +41,9 @@ name:           memutil
 vermagic:       5.15.5-100.fc34.x86_64 SMP mod_unload
 ```
 
+
 ### Inserting
+
 To insert the module, run: `sudo insmod memutil.ko`
 
 `cpupower frequency-info` should now list `memutil` as one of the available governors.
@@ -43,10 +51,22 @@ If you have an intel cpu you likely have to disable intel_pstate first. See "Dis
 
 Switch to the governor by using `cpupower frequency-set -g memutil`.
 
+
+#### Module Parameters
+
+You can customize the memutil module by providing parameters on insertion. **These are read on startup only!**
+
+List all parameters by reading the directory `ls /sys/module/memutil/parameters`.
+
+We currently support the parameters `event_name1`, `event_name2`, `event_name3` to customize the perf counters to read from. Provide them by stating them on insertion e.g. `sudo insmod memutil.ko event_name1="inst_retired.any"`.
+
+
 ### Removing
+
 Before removing the memutil kernel module, please switch back to another governor like schedutil.
 
 Then run `sudo rmmod memutil.ko` to remove the module from your kernel.
+
 
 ### Disabling intel_pstate
 
@@ -59,6 +79,7 @@ To disable intel_pstate add the kernel commandline parameter "intel_pstate=disab
     6. Press Ctrl+X to boot the system with these changes.
     7. As mentioned these changes are temporary, i.e. the adjustment to the command line will only affect this one boot and the changes to the command line
        will not be there for the next boot.
+
 
 ## Output log
 You can view the debug output of memutil via `dmesg`.

@@ -5,6 +5,7 @@
 #include "linux/printk.h"
 #include "linux/rcupdate.h"
 #include "linux/smp.h"
+#include "linux/types.h"
 #include <linux/module.h> // included for all kernel modules
 #include <linux/kernel.h> // included for KERN_INFO
 #include <linux/init.h> // included for __init and __exit macros
@@ -58,8 +59,8 @@ static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
 
 static char *event_name1 = "inst_retired.any";
-static char *event_name2 = "cycles";
-static char *event_name3 = "cycle_activity.stalls_mem_any";
+static char *event_name2 = "cpu_clk_unhalted.thread";
+static char *event_name3 = "cycle_activity.stalls_l2_miss";
 
 module_param(event_name1, charp, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(event_name1, "First perf counter name");
@@ -109,29 +110,6 @@ static int memutil_read_perf_event(struct memutil_policy *policy, int event_inde
 	return 0;
 }
 
-static void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
-{
-	u64			event_values[PERF_EVENT_COUNT];
-	struct cpufreq_policy 	*policy = memutil_policy->policy;
-	int i;
-
-#if AGGREGATE_LOG
-	memutil_policy->log_counter++;
-	if (memutil_policy->log_counter <= 5) {
-		return;
-	}
-	memutil_policy->log_counter = 0;
-#endif
-	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
-		if (!memutil_policy->events[i]) {
-			return;
-		}
-		memutil_read_perf_event(memutil_policy, i, &event_values[i]);
-	}
-
-	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
-}
-
 int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int value)
 {
 	struct cpufreq_policy	*policy = memutil_policy->policy;
@@ -152,10 +130,14 @@ int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int
 void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 {
 	u64			event_values[PERF_EVENT_COUNT];
-	u64			mem_stalls;
-	u64			cycles;
+	s64			offcore_stalls;
+	s64			cycles;
 	
-	u64			stalls_per_cycle;
+	s64			stalls_per_cycle;
+	s64			max_stalls_perc;
+	s64			min_stalls_perc;
+	s64			stalls_perc_diff;
+	s64			power_perc;
 	unsigned int		new_frequency;
 
 	int			i;
@@ -175,33 +157,30 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 	}
 
 
-	mem_stalls = event_values[2];
+	// this will cast the values into signed types which are easier to work with
+	offcore_stalls = event_values[2];
 	cycles = event_values[1];
 
 	new_frequency = policy->max;
 	if(unlikely(cycles == 0)) {
 		new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
 
-		memutil_set_frequency_to(memutil_policy, new_frequency);
 	}
 	else {
-		stalls_per_cycle = (mem_stalls * 100) / (cycles);
+		stalls_per_cycle = (offcore_stalls * 100) / cycles;
+		/* inst_per_cycle = (instructions * 100) / cycles; // IPC */
 
-		// memory-bound
-		if (stalls_per_cycle > 75 /* % */) {
-			new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
-			memutil_set_frequency_to(memutil_policy, new_frequency);
-		}
-
-		// cpu-bound
-		if (stalls_per_cycle < 25 /* % */) {
-
-			new_frequency = min(policy->max, memutil_policy->last_requested_freq + (policy->max - policy->min) / 10);
-			memutil_set_frequency_to(memutil_policy, new_frequency);
-		}
-
-		// neither cpu, nor memory-bound, so we don't want to change the frequency
+		// Do a linear interpolation:
+		// 10% stalls/cycle = max cpu frequency, 80% stalls/cycle = min cpu frequency
+		max_stalls_perc = 65;
+		min_stalls_perc = 10;
+		stalls_perc_diff = max_stalls_perc - min_stalls_perc;
+		power_perc = max(min(((stalls_perc_diff) - stalls_per_cycle + min_stalls_perc) * 100 / stalls_perc_diff, 100LL), 0LL);
+		new_frequency = power_perc * (policy->max - policy->min) / 100 + policy->min;
 	}
+	// We must always set the frequency, otherwise the cpufreq driver will
+	// start chooseing a frequency for us.
+	memutil_set_frequency_to(memutil_policy, new_frequency);
 
 	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
 }
@@ -227,7 +206,6 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 {
 	kfree(memutil_policy);
 }
-
 
 static int memutil_init(struct cpufreq_policy *policy)
 {
