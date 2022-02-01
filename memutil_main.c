@@ -65,7 +65,7 @@ static struct pmu_events_map *events_map = NULL;
 
 static char *event_name1 = "inst_retired.any";
 static char *event_name2 = "cpu_clk_unhalted.thread";
-static char *event_name3 = "cycle_activity.stalls_mem_any";
+static char *event_name3 = "cycle_activity.stalls_l2_miss";
 
 module_param(event_name1, charp, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(event_name1, "First perf counter name");
@@ -135,12 +135,14 @@ int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int
 void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 {
 	u64			event_values[PERF_EVENT_COUNT];
-	s64			instructions;
-	s64			mem_stalls;
+	s64			offcore_stalls;
 	s64			cycles;
 	
 	s64			stalls_per_cycle;
-	s64			inst_per_cycle;
+	s64			max_stalls_perc;
+	s64			min_stalls_perc;
+	s64			stalls_perc_diff;
+	s64			power_perc;
 	unsigned int		new_frequency;
 
 	int			i;
@@ -161,9 +163,8 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 
 
 	// this will cast the values into signed types which are easier to work with
-	mem_stalls = event_values[2];
+	offcore_stalls = event_values[2];
 	cycles = event_values[1];
-	instructions = event_values[0];
 
 	new_frequency = policy->max;
 	if(unlikely(cycles == 0)) {
@@ -171,23 +172,16 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 
 	}
 	else {
-		stalls_per_cycle = (mem_stalls * 100) / cycles;
-		inst_per_cycle = (instructions * 100) / cycles; // IPC
+		stalls_per_cycle = (offcore_stalls * 100) / cycles;
+		/* inst_per_cycle = (instructions * 100) / cycles; // IPC */
 
-		// low IPC, as well as a high rate of memory stalls,
-		// we seem to be memory bound -> reduce frequency
-		if(inst_per_cycle < 40 /* % */ || (stalls_per_cycle - inst_per_cycle) > 10 /* % */) {
-			new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
-		}
-		// high IPC, or low stalls/cycle,
-		// we seem to be cpu-bound -> increase frequency
-		else if (inst_per_cycle >= 50 && (inst_per_cycle - stalls_per_cycle) > 10 /* % */) {
-			new_frequency = min(policy->max, memutil_policy->last_requested_freq + (policy->max - policy->min) / 10);
-		}
-		else {
-			// frequency might be alright, but slowly increase it again, just to be sure
-			new_frequency = min(policy->max, memutil_policy->last_requested_freq + (policy->max - policy->min) / 100);
-		}
+		// Do a linear interpolation:
+		// 10% stalls/cycle = max cpu frequency, 80% stalls/cycle = min cpu frequency
+		max_stalls_perc = 65;
+		min_stalls_perc = 10;
+		stalls_perc_diff = max_stalls_perc - min_stalls_perc;
+		power_perc = max(min(((stalls_perc_diff) - stalls_per_cycle + min_stalls_perc) * 100 / stalls_perc_diff, 100LL), 0LL);
+		new_frequency = power_perc * (policy->max - policy->min) / 100 + policy->min;
 	}
 	// We must always set the frequency, otherwise the cpufreq driver will
 	// start chooseing a frequency for us.
