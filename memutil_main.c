@@ -16,20 +16,16 @@
 #include "memutil_log.h"
 #include "memutil_debug_log.h"
 #include "memutil_debugfs.h"
-#include "pmu_cpuid_helper.h"
-#include "pmu_events.h"
 #include "memutil_debugfs_log.h"
 #include "memutil_debugfs_info.h"
 #include "memutil_perf_read_local.h"
+#include "memutil_perf_counter.h"
 
 #define LOGBUFFER_SIZE 2000
 
 #define AGGREGATE_LOG 0
 
-#define PARSE_EVENT_MAX_PAIRS 6
 #define PERF_EVENT_COUNT 3
-
-typedef char* key_value_pair_t[2];
 
 struct memutil_policy {
 	struct cpufreq_policy	*policy;
@@ -60,10 +56,9 @@ static bool is_logfile_initialized = false;
 
 static DEFINE_PER_CPU(struct memutil_cpu, memutil_cpu_list);
 static DEFINE_MUTEX(memutil_init_mutex);
-static struct pmu_events_map *events_map = NULL;
 
 static char *event_name1 = "inst_retired.any";
-static char *event_name2 = "cpu_clk_unhalted.thread";
+static char *event_name2 = "cycles";
 static char *event_name3 = "cycle_activity.stalls_mem_any";
 
 module_param(event_name1, charp, S_IRUSR | S_IRGRP | S_IROTH);
@@ -233,252 +228,6 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 	kfree(memutil_policy);
 }
 
-static int setup_events_map(void)
-{
-	int i, return_value;
-	char* cpuid = memutil_get_cpuid_str();
-	debug_info("Memutil: Setting up events map");
-	if (!cpuid) {
-		pr_warn("Memutil: Failed to read CPUID");
-		return -1;
-	}
-	i = 0;
-	for (;;) {
-		events_map = &memutil_pmu_events_map[i++];
-		if (!events_map->table) {
-			pr_warn("Memutil: Did not find pmu events map for CPUID=\"%s\"", cpuid);
-			events_map = NULL;
-			return_value = -2;
-			break;
-		}
-
-		if (!memutil_strcmp_cpuid_str(events_map->cpuid, cpuid)) {
-			debug_info("Memutil: Found table %s for CPUID=\"%s\"", events_map->cpuid, cpuid);
-			return_value = 0;
-			break;
-		}
-	}
-	kfree(cpuid);
-	return return_value;
-}
-
-static void teardown_events_map(void)
-{
-	events_map = NULL;
-}
-
-struct pmu_event *find_event(const char *event_name)
-{
-	struct pmu_event *event = NULL;
-	int i = 0;
-	if(!events_map)
-		return NULL;
-	for (;;) {
-		event = &events_map->table[i++];
-		if (!event->name && !event->event && !event->desc) {
-			event = NULL;
-			break;
-		}
-		if (event->name && !strcmp(event->name, event_name)) {
-			break;
-		}
-	}
-	return event;
-}
-
-static int parse_event_pair(char** pair, u64 *config, u64 *period)
-{
-	unsigned long long value;
-	if (kstrtoull(pair[1], 0, &value)) {
-		pr_err("Memutil: parse_event_pair: Converting number string failed. Str=%s", pair[1]);
-		return -1;
-	}
-
-	//See arch/x86/events/perf_event.h struct x86_pmu_config for what bits are what or Intel Volume 3B documentation
-	if (!strcmp("event", pair[0])) {
-		*config |= (value & 0xFF);
-	} else if (!strcmp("umask", pair[0])) {
-		*config |= (value & 0xFF) << 8;
-	} else if (!strcmp("cmask", pair[0])) {
-		*config |= (value & 0xFF) << 24;
-	} else if (!strcmp("edge", pair[0])) {
-		*config |= (value & 1) << 18;
-	} else if (!strcmp("inv", pair[0])) {
-		*config |= (value & 1) << 23;
-	} else if (!strcmp("any", pair[0])) {
-		pr_warn("Memutil: parse_event_pair: Any config value is used");
-		*config |= (value & 1) << 21;
-	} else if (!strcmp("period", pair[0])) {
-		*period = value;
-	} else {
-		pr_err("Memutil: parse_event_pair: Unknown key: %s", pair[0]);
-		return -2;
-	}
-	return 0;
-}
-
-static int parse_event(struct pmu_event *event, u64 *config, u64 *period)
-{
-	key_value_pair_t pairs[PARSE_EVENT_MAX_PAIRS];
-	size_t event_string_size;
-	char *event_string;
-	int pair_count;
-	int return_value;
-	bool is_reading_key = true;
-	int pair_index = 0;
-	int current_index = 0;
-
-	*config = 0;
-
-	event_string_size = strlen(event->event)+1;
-	event_string = kmalloc(event_string_size, GFP_KERNEL);
-	if (!event_string) {
-		pr_err("Memutil: Failed to allocate memory in parse_event");
-		return -1;
-	}
-	strncpy(event_string, event->event, event_string_size);
-
-	pairs[0][0] = event_string;
-	for (; event_string[current_index] != 0; ++current_index) {
-		if (is_reading_key && event_string[current_index] == '=') {
-			event_string[current_index] = 0;
-			++current_index;
-			pairs[pair_index][1] = event_string + current_index;
-			is_reading_key = false;
-		} else if (!is_reading_key && event_string[current_index] == ',') {
-			event_string[current_index] = 0;
-			++current_index;
-			++pair_index;
-			if (pair_index >= PARSE_EVENT_MAX_PAIRS) {
-				pr_err("Memutil: parse event: more pairs than expected: Expected max %d, event string is %s",
-				       PARSE_EVENT_MAX_PAIRS, event_string);
-				goto err;
-			}
-			pairs[pair_index][0] = event_string + current_index;
-			is_reading_key = true;
-		}
-	}
-	pair_count = pair_index + 1;
-
-	for (pair_index = 0; pair_index < pair_count; ++pair_index) {
-		if (parse_event_pair(pairs[pair_index], config, period)) {
-			goto err;
-		}
-	}
-
-	return_value = 0;
-	goto out;
-err:
-	return_value = -1;
-out:
-	kfree(event_string);
-	return return_value;
-}
-
-static struct perf_event * __must_check memutil_allocate_perf_counter_for(struct memutil_policy *policy, u32 perf_event_type, u64 perf_event_config)
-{
-	struct perf_event_attr perf_attr;
-	struct perf_event *perf_event;
-
-	memset(&perf_attr, 0, sizeof(perf_attr));
-
-	perf_attr.type = perf_event_type;
-	perf_attr.size = sizeof(perf_attr);
-	perf_attr.config = perf_event_config;
-	perf_attr.disabled = 0; // enable the event by default
-	perf_attr.exclude_kernel = 1;
-	perf_attr.exclude_hv = 1;
-
-	debug_info("Memutil: Perf create kernel counter");
-	perf_event = perf_event_create_kernel_counter(
-		&perf_attr,
-		policy->policy->cpu,
-		/*task*/ NULL,
-		/*overflow_handler*/ NULL,
-		/*context*/ NULL);
-
-	return perf_event;
-}
-
-
-/**
- * @brief Allocate a named counter that is available in the pmu_events table.
- *        This currently only works for Intel CPUs
- * @param policy
- * @param counter_name
- * @return
- */
-static struct perf_event *memutil_allocate_named_perf_counter(struct memutil_policy *policy, const char *counter_name)
-{
-	u32 perf_event_type;
-	u64 perf_event_config;
-	u64 perf_event_period;
-	struct pmu_event *event;
-
-	perf_event_type = 4; //hardcoded type that is usually cpu pmu
-	perf_event_config = 0;
-	perf_event_period = 0;
-
-	debug_info("Memutil: Perf counter searching %s", counter_name);
-	event = find_event(counter_name);
-	if (!event) {
-		pr_warn("Memutil: Failed to find event for given counter name %s", counter_name);
-		return ERR_PTR(-1);
-	}
-	debug_info("Memutil: Perf counter parsing %s", counter_name);
-	if (parse_event(event, &perf_event_config, &perf_event_period)) {
-		pr_warn("Memutil: Failed to parse event for given counter name %s", counter_name);
-		return ERR_PTR(-1);
-	}
-	debug_info("Memutil: Perf counter allocating %s", counter_name);
-	return memutil_allocate_perf_counter_for(policy, perf_event_type, perf_event_config);
-}
-
-static long __must_check memutil_allocate_perf_counters(struct memutil_policy *policy)
-{
-	int i;
-	struct perf_event *perf_event;
-	char *event_names[PERF_EVENT_COUNT] = {
-		event_name1,
-		event_name2,
-		event_name3
-	};
-
-	debug_info("Memutil: Allocating perf counters");
-	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
-		debug_info("Memutil: Allocate perf counter %d", i);
-		perf_event = memutil_allocate_named_perf_counter(
-			policy,
-			event_names[i]);
-		debug_info("Memutil: Allocated perf counter %d", i);
-		if(unlikely(IS_ERR(perf_event))) {
-			pr_err("Memutil: Failed to allocate perf event %s: %pe", event_names[i], perf_event);
-			goto cleanup;
-		}
-		policy->events[i] = perf_event;
-	}
-	debug_info("Memutil: Allocated perf counters");
-	return 0;
-
-cleanup:
-	for (--i; i >= 0; --i) { //counter should start with i - 1 --> --i as initializer
-		perf_event_release_kernel(policy->events[i]);
-		policy->events[i] = NULL;
-	}
-	return PTR_ERR(perf_event);
-}
-
-static void memutil_release_perf_events(struct memutil_policy *policy)
-{
-	int i;
-	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
-		if (unlikely(!policy->events[i])) {
-			pr_warn("Memutil: Tried to release event %d which is NULL", i);
-		} else {
-			perf_event_release_kernel(policy->events[i]);
-		}
-	}
-}
 
 static int memutil_init(struct cpufreq_policy *policy)
 {
@@ -640,6 +389,17 @@ static void install_update_hook(struct cpufreq_policy *policy)
 	}
 }
 
+static int allocate_perf_counters(struct memutil_policy *policy)
+{
+	char *event_names[PERF_EVENT_COUNT] = {
+		event_name1,
+		event_name2,
+		event_name3
+	};
+
+	return memutil_allocate_perf_counters_for_cpu(policy->policy->cpu, event_names, policy->events, PERF_EVENT_COUNT);
+}
+
 static int memutil_start(struct cpufreq_policy *policy)
 {
 	int return_value;
@@ -654,13 +414,13 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 	start_logging(memutil_policy, &infofile_data);
 	if (policy->cpu == 0) {
-		if (setup_events_map() != 0) {
+		if (memutil_setup_events_map() != 0) {
 			return_value = -1;
 			goto fail_events_map;
 		}
 	}
 
-	return_value = (int) memutil_allocate_perf_counters(memutil_policy);
+	return_value = allocate_perf_counters(memutil_policy);
 	if (unlikely(return_value != 0)) {
 		goto fail_allocate_perf_counters;
 	}
@@ -672,7 +432,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 fail_allocate_perf_counters:
 	if (memutil_policy->policy->cpu == 0) {
-		teardown_events_map();
+		memutil_teardown_events_map();
 	}
 fail_events_map:
 	mutex_lock(&memutil_init_mutex);
@@ -696,14 +456,14 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	pr_info("Memutil: Stopping governor (core=%d)", policy->cpu);
 	// TODO
 	//
-	memutil_release_perf_events(memutil_policy);
+	memutil_release_perf_events(memutil_policy->events, PERF_EVENT_COUNT);
 	mutex_lock(&memutil_init_mutex);
 	if (is_logfile_initialized) {
 		memutil_debugfs_exit();
 		is_logfile_initialized = false;
 	}
 	if (policy->cpu == 0) {
-		teardown_events_map();
+		memutil_teardown_events_map();
 	}
 	mutex_unlock(&memutil_init_mutex);
 
