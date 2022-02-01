@@ -115,29 +115,6 @@ static int memutil_read_perf_event(struct memutil_policy *policy, int event_inde
 	return 0;
 }
 
-static void memutil_log_perf_data(struct memutil_policy *memutil_policy, u64 time)
-{
-	u64			event_values[PERF_EVENT_COUNT];
-	struct cpufreq_policy 	*policy = memutil_policy->policy;
-	int i;
-
-#if AGGREGATE_LOG
-	memutil_policy->log_counter++;
-	if (memutil_policy->log_counter <= 5) {
-		return;
-	}
-	memutil_policy->log_counter = 0;
-#endif
-	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
-		if (!memutil_policy->events[i]) {
-			return;
-		}
-		memutil_read_perf_event(memutil_policy, i, &event_values[i]);
-	}
-
-	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
-}
-
 int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int value)
 {
 	struct cpufreq_policy	*policy = memutil_policy->policy;
@@ -261,7 +238,7 @@ static int setup_events_map(void)
 		}
 
 		if (!memutil_strcmp_cpuid_str(events_map->cpuid, cpuid)) {
-			debug_info("Memutil: Found table %s for CPUID=\"%s\"", events_map->cpuid, cpuid);
+			debug_info("Memutil: Found table \"%s\" for CPUID=\"%s\"", events_map->cpuid, cpuid);
 			return_value = 0;
 			break;
 		}
@@ -305,13 +282,14 @@ static int parse_event_pair(char** pair, u64 *config, u64 *period)
 	//See arch/x86/events/perf_event.h struct x86_pmu_config for what bits are what or Intel Volume 3B documentation
 	if (!strcmp("event", pair[0])) {
 		*config |= (value & 0xFF);
-		return 0;
 	} else if (!strcmp("umask", pair[0])) {
 		*config |= (value & 0xFF) << 8;
 	} else if (!strcmp("cmask", pair[0])) {
 		*config |= (value & 0xFF) << 24;
 	} else if (!strcmp("edge", pair[0])) {
 		*config |= (value & 1) << 18;
+	} else if (!strcmp("inv", pair[0])) {
+		*config |= (value & 1) << 23;
 	} else if (!strcmp("any", pair[0])) {
 		pr_warn("Memutil: parse_event_pair: Any config value is used");
 		*config |= (value & 1) << 21;
@@ -319,6 +297,7 @@ static int parse_event_pair(char** pair, u64 *config, u64 *period)
 		*period = value;
 	} else {
 		pr_err("Memutil: parse_event_pair: Unknown key: %s", pair[0]);
+		return -2;
 	}
 	return 0;
 }
@@ -425,15 +404,14 @@ static struct perf_event *memutil_allocate_named_perf_counter(struct memutil_pol
 	perf_event_config = 0;
 	perf_event_period = 0;
 
-	debug_info("Memutil: Perf counter searching %s", counter_name);
 	event = find_event(counter_name);
 	if (!event) {
-		pr_warn("Memutil: Failed to find event for given counter name %s", counter_name);
+		pr_warn("Memutil: Failed to find event for given perf counter name \"%s\"", counter_name);
 		return ERR_PTR(-1);
 	}
 	debug_info("Memutil: Perf counter parsing %s", counter_name);
 	if (parse_event(event, &perf_event_config, &perf_event_period)) {
-		pr_warn("Memutil: Failed to parse event for given counter name %s", counter_name);
+		pr_warn("Memutil: Failed to parse event for given perf counter name \"%s\"", counter_name);
 		return ERR_PTR(-1);
 	}
 	debug_info("Memutil: Perf counter allocating %s", counter_name);
@@ -452,13 +430,12 @@ static long __must_check memutil_allocate_perf_counters(struct memutil_policy *p
 
 	debug_info("Memutil: Allocating perf counters");
 	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
-		debug_info("Memutil: Allocate perf counter %d", i);
+		debug_info("Memutil: Allocate perf counter for event_name%d=\"%s\"", i+1, event_names[i]);
 		perf_event = memutil_allocate_named_perf_counter(
 			policy,
 			event_names[i]);
-		debug_info("Memutil: Allocated perf counter %d", i);
 		if(unlikely(IS_ERR(perf_event))) {
-			pr_err("Memutil: Failed to allocate perf event %s: %pe", event_names[i], perf_event);
+			pr_err("Memutil: Failed to allocate perf counter for event_name%d=\"%s\": err %pe", i+1, event_names[i], perf_event);
 			goto cleanup;
 		}
 		policy->events[i] = perf_event;
@@ -525,7 +502,6 @@ static void memutil_exit(struct cpufreq_policy *policy)
 
 	policy->governor_data = NULL;
 
-	memutil_release_perf_events(memutil_policy);
 	memutil_policy_free(memutil_policy);
 	cpufreq_disable_fast_switch(policy);
 }
@@ -703,6 +679,7 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	pr_info("Memutil: Stopping governor (core=%d)", policy->cpu);
 	// TODO
 	//
+	memutil_release_perf_events(memutil_policy);
 	mutex_lock(&memutil_init_mutex);
 	if (is_logfile_initialized) {
 		memutil_debugfs_exit();
