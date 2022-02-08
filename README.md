@@ -68,6 +68,11 @@ Before removing the memutil kernel module, please switch back to another governo
 Then run `sudo rmmod memutil.ko` to remove the module from your kernel.
 
 
+### Reloading the governor
+
+After making changes to the governors code, run the `make_reload.sh` shell script, to disable, remove, rebuild, reinsert and enable memutil with one command.
+The memutil governor must be active when this command is run, otherwise it will fail.
+
 ### Disabling intel_pstate
 
 To disable intel_pstate add the kernel commandline parameter "intel_pstate=disable". This can be done temporarily by:
