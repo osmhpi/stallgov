@@ -1,6 +1,25 @@
 #include <linux/kernel.h>
+#include <linux/version.h>
 #include <linux/sched/clock.h>
 #include "linux/perf_event.h"
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+	#define __load_acquire(ptr)                                         \
+	({                                                                  \
+		__unqual_scalar_typeof(*(ptr)) ___p = READ_ONCE(*(ptr));        \
+		barrier();                                                      \
+		___p;                                                           \
+	})
+
+	enum event_type_t {
+		EVENT_FLEXIBLE = 0x1,
+		EVENT_PINNED = 0x2,
+		EVENT_TIME = 0x4,
+		/* see ctx_resched() for details */
+		EVENT_CPU = 0x8,
+		EVENT_ALL = EVENT_FLEXIBLE | EVENT_PINNED,
+	};
+#endif
 
 static inline u64 perf_clock(void)
 {
@@ -31,6 +50,56 @@ __perf_update_times(struct perf_event *event, u64 now, u64 *enabled, u64 *runnin
 	*running = event->total_time_running;
 	if (state >= PERF_EVENT_STATE_ACTIVE)
 		*running += delta;
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+	static inline int is_cgroup_event(struct perf_event *event)
+	{
+		return event->cgrp != NULL;
+	}
+
+	static inline
+	u64 perf_cgroup_event_time_now(struct perf_event *event, u64 now)
+	{
+		struct perf_cgroup_info *t;
+
+		t = per_cpu_ptr(event->cgrp->info, event->cpu);
+		if (!__load_acquire(&t->active))
+			return t->time;
+		now += READ_ONCE(t->timeoffset);
+		return now;
+	}
+
+	static u64
+	perf_event_time_now(struct perf_event *event, u64 now)
+	{
+		struct perf_event_context *ctx = event->ctx;
+
+		if (unlikely(!ctx))
+			return 0;
+
+		if (is_cgroup_event(event))
+			return perf_cgroup_event_time_now(event, now);
+
+		if (!(__load_acquire(&ctx->is_active) & EVENT_TIME))
+			return ctx->time;
+
+		now += READ_ONCE(ctx->timeoffset);
+		return now;
+	}
+#endif
+
+static void
+__calc_timer_values(struct perf_event *event, u64 *now, u64 *enabled, u64 *running)
+{
+	u64 ctx_time;
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+		*now = perf_clock();
+		ctx_time = perf_event_time_now(event, *now);
+	#else
+		ctx_time = event->shadow_ctx_time + perf_clock();
+	#endif
+	__perf_update_times(event, ctx_time, enabled, running);
 }
 
 /*
@@ -92,10 +161,9 @@ int memutil_perf_event_read_local(struct perf_event *event, u64 *value,
 
 	*value = local64_read(&event->count);
 	if (enabled || running) {
-		u64 now = event->shadow_ctx_time + perf_clock();
-		u64 __enabled, __running;
+		u64 __enabled, __running, __now;
+		__calc_timer_values(event, &__now, &__enabled, &__running);
 
-		__perf_update_times(event, now, &__enabled, &__running);
 		if (enabled)
 			*enabled = __enabled;
 		if (running)
