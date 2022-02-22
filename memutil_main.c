@@ -10,6 +10,7 @@
 #include <linux/kernel.h> // included for KERN_INFO
 #include <linux/init.h> // included for __init and __exit macros
 #include <linux/sched/cpufreq.h>
+#include <uapi/linux/sched/types.h>
 #include <trace/events/power.h>
 #include <linux/perf_event.h>
 #include <linux/err.h>
@@ -28,6 +29,21 @@
 
 #define PERF_EVENT_COUNT 3
 
+//copied from kernel/sched/sched.h
+/*
+ * !! For sched_setattr_nocheck() (kernel) only !!
+ *
+ * This is actually gross. :(
+ *
+ * It is used to make schedutil kworker(s) higher priority than SCHED_DEADLINE
+ * tasks, but still be able to sleep. We need this on platforms that cannot
+ * atomically change clock frequency. Remove once fast switching will be
+ * available on such platforms.
+ *
+ * SUGOV stands for SchedUtil GOVernor.
+ */
+#define SCHED_FLAG_SUGOV	0x10000000
+
 struct memutil_policy {
 	struct cpufreq_policy	*policy;
 
@@ -43,6 +59,17 @@ struct memutil_policy {
 #if AGGREGATE_LOG
 	unsigned int log_counter;
 #endif
+	/* The next fields are only needed if fast switch cannot be used: */
+	raw_spinlock_t          update_lock;
+	struct			irq_work irq_work;
+	struct			kthread_work work;
+	struct			mutex work_lock;
+	struct			kthread_worker worker;
+	struct task_struct	*thread;
+	bool			work_in_progress;
+
+	bool			limits_changed;
+	bool			need_freq_update;
 };
 
 struct memutil_cpu {
@@ -110,21 +137,35 @@ static int memutil_read_perf_event(struct memutil_policy *policy, int event_inde
 	return 0;
 }
 
-int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int value)
+static void memutil_deferred_set_frequency(struct memutil_policy* memutil_policy)
+{
+	//lock to prevent missing queuing new frequency update (see worker fn)
+	raw_spin_lock(&memutil_policy->update_lock);
+	if (!memutil_policy->work_in_progress) {
+		memutil_policy->work_in_progress = true;
+		irq_work_queue(&memutil_policy->irq_work);
+	}
+	raw_spin_unlock(&memutil_policy->update_lock);
+}
+
+int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int value, u64 time)
 {
 	struct cpufreq_policy	*policy = memutil_policy->policy;
 
 	memutil_policy->last_requested_freq = value;
-	
-	if (!policy_is_shared(policy) && policy->fast_switch_enabled) {
-		cpufreq_driver_fast_switch(policy, value);
-		return 0;
-	}
-	else {
-		pr_err_ratelimited("Memutil: Cannot set frequency");
+	memutil_policy->last_freq_update_time = time;
+
+	if (policy_is_shared(policy)) {
+		pr_err_ratelimited("Memutil: Cannot set frequency for shared policy");
 		return 1;
 	}
 
+	if (policy->fast_switch_enabled) {
+		cpufreq_driver_fast_switch(policy, value);
+	} else {
+		memutil_deferred_set_frequency(memutil_policy);
+	}
+	return 0;
 }
 
 void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
@@ -139,19 +180,27 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 	s64			stalls_perc_diff;
 	s64			power_perc;
 	unsigned int		new_frequency;
+	int                     max_freq, min_freq, last_freq;
 
 	int			i;
 
 	struct cpufreq_policy 	*policy = memutil_policy->policy;
 
+	//Using unsigned integer math can lead to unwanted underflows, so cast to int as we don't need values >~2'000'000'000
+	max_freq = policy->max;
+	min_freq = policy->min;
+	last_freq = memutil_policy->last_requested_freq;
+
+	// We must always set the frequency, otherwise the cpufreq driver will
+	// start chooseing a frequency for us.
 	for (i = 0; i < PERF_EVENT_COUNT; ++i) {
 		if (unlikely(!memutil_policy->events[i])) {
 			pr_err_ratelimited("Missing perf event %d", i);
-			memutil_set_frequency_to(memutil_policy, policy->max);
+			memutil_set_frequency_to(memutil_policy, policy->max, time);
 			return;
 		}
 		if(unlikely(memutil_read_perf_event(memutil_policy, i, &event_values[i]) != 0)) {
-			memutil_set_frequency_to(memutil_policy, policy->max);
+			memutil_set_frequency_to(memutil_policy, policy->max, time);
 			return;
 		}
 	}
@@ -163,8 +212,7 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 
 	new_frequency = policy->max;
 	if(unlikely(cycles == 0)) {
-		new_frequency = max(policy->min, memutil_policy->last_requested_freq - (policy->max - policy->min) / 10);
-
+		new_frequency = max(min_freq, last_freq - (max_freq - min_freq) / 10);
 	}
 	else {
 		stalls_per_cycle = (offcore_stalls * 100) / cycles;
@@ -175,12 +223,12 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 		max_stalls_perc = 65;
 		min_stalls_perc = 10;
 		stalls_perc_diff = max_stalls_perc - min_stalls_perc;
-		power_perc = max(min(((stalls_perc_diff) - stalls_per_cycle + min_stalls_perc) * 100 / stalls_perc_diff, 100LL), 0LL);
-		new_frequency = power_perc * (policy->max - policy->min) / 100 + policy->min;
+		power_perc = max(min((stalls_perc_diff - stalls_per_cycle + min_stalls_perc) * 100 / stalls_perc_diff, 100LL), 0LL);
+		new_frequency = power_perc * (max_freq - min_freq) / 100 + min_freq;
 	}
 	// We must always set the frequency, otherwise the cpufreq driver will
 	// start chooseing a frequency for us.
-	memutil_set_frequency_to(memutil_policy, new_frequency);
+	memutil_set_frequency_to(memutil_policy, new_frequency, time);
 
 	memutil_log_data(time, event_values, policy->cpu, memutil_policy->last_requested_freq, memutil_policy->logbuffer);
 }
@@ -199,12 +247,111 @@ memutil_policy_alloc(struct cpufreq_policy *policy)
 
 	memutil_policy->policy = policy;
 	memutil_policy->last_requested_freq = policy->max;
+	raw_spin_lock_init(&memutil_policy->update_lock);
 	return memutil_policy;
 }
 
 static void memutil_policy_free(struct memutil_policy *memutil_policy)
 {
 	kfree(memutil_policy);
+}
+
+static void memutil_work(struct kthread_work *work)
+{
+	struct memutil_policy *memutil_policy = container_of(work, struct memutil_policy, work);
+	unsigned int frequency;
+	unsigned long irq_flags;
+
+	/*
+	 * Hold sg_policy->update_lock shortly to handle the case where:
+	 * memutil_policy->next_freq is read here, and then updated by
+	 * memutil_deferred_set_frequency() just before work_in_progress is set to false
+	 * here, we may miss queueing the new update.
+	 *
+	 * Note: If a work was queued after the update_lock is released,
+	 * memutil_work() will just be called again by kthread_work code; and the
+	 * request will be proceed before the memutil thread sleeps.
+	 */
+	raw_spin_lock_irqsave(&memutil_policy->update_lock, irq_flags);
+	frequency = memutil_policy->last_requested_freq;
+	memutil_policy->work_in_progress = false;
+	raw_spin_unlock_irqrestore(&memutil_policy->update_lock, irq_flags);
+
+	mutex_lock(&memutil_policy->work_lock);
+	__cpufreq_driver_target(memutil_policy->policy, frequency, CPUFREQ_RELATION_L);
+	mutex_unlock(&memutil_policy->work_lock);
+}
+
+static void memutil_irq_work(struct irq_work *irq_work)
+{
+	struct memutil_policy *memutil_policy;
+
+	memutil_policy = container_of(irq_work, struct memutil_policy, irq_work);
+	kthread_queue_work(&memutil_policy->worker, &memutil_policy->work);
+}
+
+static int memutil_create_worker_thread(struct memutil_policy* memutil_policy)
+{
+	struct task_struct *thread;
+	struct sched_attr attr = {
+		.size		= sizeof(struct sched_attr),
+		.sched_policy	= SCHED_DEADLINE,
+		.sched_flags	= SCHED_FLAG_SUGOV, //we reuse this flag to have same scheduling behaviour as schedutil
+		.sched_nice	= 0,
+		.sched_priority	= 0,
+		/*
+		 * Fake (unused) bandwidth; workaround to "fix"
+		 * priority inheritance.
+		 */
+		.sched_runtime	=  1000000,
+		.sched_deadline = 10000000,
+		.sched_period	= 10000000,
+	};
+	struct cpufreq_policy *policy = memutil_policy->policy;
+	int return_value;
+
+	/* kthread only required for slow path */
+	if (policy->fast_switch_enabled) {
+		return 0;
+	}
+
+	kthread_init_work(&memutil_policy->work, memutil_work);
+	kthread_init_worker(&memutil_policy->worker);
+	thread = kthread_create(kthread_worker_fn, &memutil_policy->worker,
+				"memutil:%d",
+				cpumask_first(policy->related_cpus));
+	if (IS_ERR(thread)) {
+		pr_err("failed to create memutil thread: %ld\n", PTR_ERR(thread));
+		return PTR_ERR(thread);
+	}
+
+	return_value = sched_setattr_nocheck(thread, &attr);
+	if (return_value) {
+		kthread_stop(thread);
+		pr_warn("Memutil: %s: failed to set SCHED_DEADLINE\n", __func__);
+		return return_value;
+	}
+
+	memutil_policy->thread = thread;
+	kthread_bind(thread, policy->cpu);
+	init_irq_work(&memutil_policy->irq_work, memutil_irq_work);
+	mutex_init(&memutil_policy->work_lock);
+
+	wake_up_process(thread);
+
+	return 0;
+}
+
+static void memutil_stop_worker_thread(struct memutil_policy *memutil_policy)
+{
+	/* kthread only required for slow path */
+	if (memutil_policy->policy->fast_switch_enabled) {
+		return;
+	}
+
+	kthread_flush_worker(&memutil_policy->worker);
+	kthread_stop(memutil_policy->thread);
+	mutex_destroy(&memutil_policy->work_lock);
 }
 
 static int memutil_init(struct cpufreq_policy *policy)
@@ -227,10 +374,17 @@ static int memutil_init(struct cpufreq_policy *policy)
 		return_value = -ENOMEM;
 		goto disable_fast_switch;
 	}
+	return_value = memutil_create_worker_thread(memutil_policy);
+	if (return_value) {
+		goto free_policy;
+	}
 
 	policy->governor_data = memutil_policy;
 
 	return 0;
+
+free_policy:
+	memutil_policy_free(memutil_policy);
 
 disable_fast_switch:
 	cpufreq_disable_fast_switch(policy);
@@ -246,6 +400,7 @@ static void memutil_exit(struct cpufreq_policy *policy)
 
 	policy->governor_data = NULL;
 
+	memutil_stop_worker_thread(memutil_policy);
 	memutil_policy_free(memutil_policy);
 	cpufreq_disable_fast_switch(policy);
 }
@@ -295,7 +450,6 @@ static void memutil_update_single_frequency(
 	}
 
 	memutil_update_frequency(memutil_policy, time);
-	memutil_policy->last_freq_update_time = time;
 }
 
 static void print_start_info(struct memutil_policy *memutil_policy, struct memutil_infofile_data *infofile_data)
@@ -304,6 +458,7 @@ static void print_start_info(struct memutil_policy *memutil_policy, struct memut
 	if (memutil_policy->policy->cpu != 0) {
 		return;
 	}
+	pr_info("Memutil: Fastswitch is %s", memutil_policy->policy->fast_switch_enabled ? "enabled" : "disabled");
 	pr_info("Memutil: Info\n"
 		"Populatable CPUs=%d\n"
 		"Populated CPUs=%d\n"
@@ -386,6 +541,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= max(NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy), 5 * NSEC_PER_MSEC);
+	memutil_policy->work_in_progress        = false;
 	infofile_data.update_interval_ms = memutil_policy->freq_update_delay_ns / NSEC_PER_MSEC;
 
 	print_start_info(memutil_policy, &infofile_data);
@@ -453,6 +609,11 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	}
 
 	synchronize_rcu();
+
+	if (!policy->fast_switch_enabled) {
+		irq_work_sync(&memutil_policy->irq_work);
+		kthread_cancel_work_sync(&memutil_policy->work);
+	}
 }
 
 static void memutil_limits(struct cpufreq_policy *policy)
