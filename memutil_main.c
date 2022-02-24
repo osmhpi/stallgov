@@ -23,11 +23,12 @@
 #include "memutil_perf_read_local.h"
 #include "memutil_perf_counter.h"
 
+#define MSR_K7_HWCR_CPB_DIS	(1ULL << 25)
+
 #define LOGBUFFER_SIZE 2000
-
 #define AGGREGATE_LOG 0
-
 #define PERF_EVENT_COUNT 3
+#define DISABLE_BOOST 0
 
 //copied from kernel/sched/sched.h
 /*
@@ -70,6 +71,9 @@ struct memutil_policy {
 
 	bool			limits_changed;
 	bool			need_freq_update;
+
+	bool                    has_boost_support;
+	bool                    was_boost_enabled;
 };
 
 struct memutil_cpu {
@@ -533,6 +537,73 @@ static int allocate_perf_counters(struct memutil_policy *policy)
 	return memutil_allocate_perf_counters_for_cpu(policy->policy->cpu, event_names, policy->events, PERF_EVENT_COUNT);
 }
 
+static bool is_boost_enabled(unsigned int cpu)
+{
+	u32 lo, hi;
+	u64 msr;
+
+	switch (boot_cpu_data.x86_vendor) {
+	case X86_VENDOR_INTEL:
+		rdmsr_on_cpu(cpu, MSR_IA32_MISC_ENABLE, &lo, &hi);
+		msr = lo | ((u64)hi << 32);
+		return !(msr & MSR_IA32_MISC_ENABLE_TURBO_DISABLE);
+	case X86_VENDOR_HYGON:
+	case X86_VENDOR_AMD:
+		rdmsr_on_cpu(cpu, MSR_K7_HWCR, &lo, &hi);
+		msr = lo | ((u64)hi << 32);
+		return !(msr & MSR_K7_HWCR_CPB_DIS);
+	}
+	return false;
+}
+
+static int set_is_boost_enabled(struct memutil_policy *memutil_policy, bool is_enabled)
+{
+	u32 msr_addr;
+	u64 msr_mask, val;
+
+	if (!memutil_policy->has_boost_support) {
+		return -EINVAL;
+	}
+
+	switch (boot_cpu_data.x86_vendor) {
+	case X86_VENDOR_INTEL:
+		msr_addr = MSR_IA32_MISC_ENABLE;
+		msr_mask = MSR_IA32_MISC_ENABLE_TURBO_DISABLE;
+		break;
+	case X86_VENDOR_HYGON:
+	case X86_VENDOR_AMD:
+		msr_addr = MSR_K7_HWCR;
+		msr_mask = MSR_K7_HWCR_CPB_DIS;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	rdmsrl_on_cpu(memutil_policy->policy->cpu, msr_addr, &val);
+	if (is_enabled) {
+		val &= ~msr_mask;
+	} else {
+		val |= msr_mask;
+	}
+
+	wrmsrl_on_cpu(memutil_policy->policy->cpu, msr_addr, val);
+	pr_info("%s boost on cpu=%d", is_enabled ? "Enabled" : "Disabled", memutil_policy->policy->cpu);
+	return 0;
+}
+
+static void setup_boost_support(struct memutil_policy *memutil_policy)
+{
+	memutil_policy->has_boost_support = (boot_cpu_has(X86_FEATURE_CPB) || boot_cpu_has(X86_FEATURE_IDA));
+	memutil_policy->has_boost_support = memutil_policy->has_boost_support
+					    && (boot_cpu_data.x86_vendor == X86_VENDOR_INTEL
+						|| boot_cpu_data.x86_vendor == X86_VENDOR_HYGON
+						|| boot_cpu_data.x86_vendor == X86_VENDOR_AMD);
+
+	if (memutil_policy->has_boost_support) {
+		memutil_policy->was_boost_enabled = is_boost_enabled(memutil_policy->policy->cpu);
+	}
+}
+
 static int memutil_start(struct cpufreq_policy *policy)
 {
 	int return_value;
@@ -561,6 +632,12 @@ static int memutil_start(struct cpufreq_policy *policy)
 	setup_per_cpu_data(policy, memutil_policy);
 	install_update_hook(policy);
 
+
+#if DISABLE_BOOST
+	setup_boost_support(memutil_policy);
+	set_is_boost_enabled(memutil_policy, false);
+#endif
+
 	pr_info("Memutil: Governor init done");
 	return 0;
 
@@ -588,8 +665,18 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	struct memutil_policy *memutil_policy = policy->governor_data;
 
 	pr_info("Memutil: Stopping governor (core=%d)", policy->cpu);
-	// TODO
-	//
+
+	for_each_cpu(cpu, policy->cpus) {
+		cpufreq_remove_update_util_hook(cpu);
+	}
+
+	synchronize_rcu();
+
+	if (!policy->fast_switch_enabled) {
+		irq_work_sync(&memutil_policy->irq_work);
+		kthread_cancel_work_sync(&memutil_policy->work);
+	}
+
 	memutil_release_perf_events(memutil_policy->events, PERF_EVENT_COUNT);
 	mutex_lock(&memutil_init_mutex);
 	if (is_logfile_initialized) {
@@ -604,16 +691,10 @@ static void memutil_stop(struct cpufreq_policy *policy)
 	if (memutil_policy->logbuffer) {
 		memutil_close_ringbuffer(memutil_policy->logbuffer);
 	}
-	for_each_cpu(cpu, policy->cpus) {
-		cpufreq_remove_update_util_hook(cpu);
-	}
 
-	synchronize_rcu();
-
-	if (!policy->fast_switch_enabled) {
-		irq_work_sync(&memutil_policy->irq_work);
-		kthread_cancel_work_sync(&memutil_policy->work);
-	}
+#if DISABLE_BOOST
+	set_is_boost_enabled(memutil_policy, memutil_policy->was_boost_enabled);
+#endif
 }
 
 static void memutil_limits(struct cpufreq_policy *policy)
