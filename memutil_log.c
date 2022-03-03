@@ -110,6 +110,7 @@ int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer)
 {
 	struct memutil_ringbuffer buffer_copy;
 	size_t alloc_size;
+	unsigned long irqflags;
 
 	raw_spin_lock_init(&buffer_copy.lock);
 	alloc_size = sizeof(struct memutil_perf_data) * buffer->size;
@@ -120,7 +121,7 @@ int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer)
 	}
 	buffer_copy.size = buffer->size;
 
-	raw_spin_lock(&buffer->lock);
+	raw_spin_lock_irqsave(&buffer->lock, irqflags);
 	memcpy(
 		buffer_copy.data,
 		buffer->data,
@@ -129,7 +130,7 @@ int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer)
 	buffer_copy.had_wraparound = buffer->had_wraparound;
 	buffer_copy.insert_offset = buffer->insert_offset;
 	clear_buffer(buffer);
-	raw_spin_unlock(&buffer->lock);
+	raw_spin_unlock_irqrestore(&buffer->lock, irqflags);
 
 	memutil_output_data(&buffer_copy, true);
 	kvfree(buffer_copy.data);
