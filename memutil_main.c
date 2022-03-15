@@ -258,7 +258,7 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 
 		// Do a linear interpolation:
 		interpolation_range = max_freq_stalls_per_cycle - min_freq_stalls_per_cycle;
-		frequency_factor = clamp(((stalls_per_cycle - min_freq_stalls_per_cycle) * 100) / interpolation_range, 0LL, 100LL);
+		frequency_factor = 100LL - clamp(((stalls_per_cycle - min_freq_stalls_per_cycle) * 100) / interpolation_range, 0LL, 100LL);
 #endif
 		new_frequency = frequency_factor * (max_freq - min_freq) / 100 + min_freq;
 	}
