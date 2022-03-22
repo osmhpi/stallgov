@@ -5,6 +5,8 @@ This module is based on the guide: https://thegeekstuff.com/2013/07/write-linux-
 
 ## Dependencies
 
+A Linux Kernel with version 5.14 or above.
+
 - Ubuntu
     - build-essential
     - linux-headers-$(uname -r)
@@ -15,6 +17,7 @@ This module is based on the guide: https://thegeekstuff.com/2013/07/write-linux-
     - gcc-c++
     - kernel-devel
     - kernel-headers
+    - kmod
 
 ### Disabling intel_pstate (Intel CPUs only)
 
