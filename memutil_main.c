@@ -95,13 +95,13 @@ static char *event_name1 = "instructions";
 static char *event_name2 = "cycles";
 static char *event_name3 = "cycles";
 
-static int max_freq_ipc = 45;
-static int min_freq_ipc = 10;
+static int max_ipc = 45;
+static int min_ipc = 10;
 
-module_param(max_freq_ipc, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(max_freq_ipc, "(IPC*100) value at which the max frequency should be used");
-module_param(min_freq_ipc, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(min_freq_ipc, "(IPC*100) value at which the min frequency should be used");
+module_param(max_ipc, int, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(max_ipc, "(IPC*100) value at which the max frequency should be used");
+module_param(min_ipc, int, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(min_ipc, "(IPC*100) value at which the min frequency should be used");
 
 #elif HEURISTIC == HEURISTIC_OFFCORE_STALLS
 
@@ -109,13 +109,13 @@ static char *event_name1 = "inst_retired.any";
 static char *event_name2 = "cpu_clk_unhalted.thread";
 static char *event_name3 = "cycle_activity.stalls_l2_miss";
 
-static int max_freq_stalls_per_cycle = 65;
-static int min_freq_stalls_per_cycle = 10;
+static int max_stalls_per_cycle = 65;
+static int min_stalls_per_cycle = 10;
 
-module_param(max_freq_stalls_per_cycle, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(max_freq_stalls_per_cycle, "(stalls_per_cycle*100) value at which the max frequency should be used");
-module_param(min_freq_stalls_per_cycle, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(min_freq_stalls_per_cycle, "(stalls_per_cycle*100) value at which the min frequency should be used");
+module_param(max_stalls_per_cycle, int, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(max_stalls_per_cycle, "(stalls_per_cycle*100) value at which the max frequency should be used");
+module_param(min_stalls_per_cycle, int, S_IRUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(min_stalls_per_cycle, "(stalls_per_cycle*100) value at which the min frequency should be used");
 
 #endif
 
@@ -261,14 +261,14 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 		instructions_per_cycle = (instructions * 100) / cycles;
 
 		// Do a linear interpolation:
-		interpolation_range = max_freq_ipc - min_freq_ipc;
-		frequency_factor = clamp(((instructions_per_cycle - min_freq_ipc) * 100) / interpolation_range, 0LL, 100LL);
+		interpolation_range = max_ipc - min_ipc;
+		frequency_factor = clamp(((instructions_per_cycle - min_ipc) * 100) / interpolation_range, 0LL, 100LL);
 #elif HEURISTIC == HEURISTIC_OFFCORE_STALLS
 		stalls_per_cycle = (offcore_stalls * 100) / cycles;
 
 		// Do a linear interpolation:
-		interpolation_range = max_freq_stalls_per_cycle - min_freq_stalls_per_cycle;
-		frequency_factor = 100LL - clamp(((stalls_per_cycle - min_freq_stalls_per_cycle) * 100) / interpolation_range, 0LL, 100LL);
+		interpolation_range = max_stalls_per_cycle - min_stalls_per_cycle;
+		frequency_factor = 100LL - clamp(((stalls_per_cycle - min_stalls_per_cycle) * 100) / interpolation_range, 0LL, 100LL);
 #endif
 		new_frequency = frequency_factor * (max_freq - min_freq) / 100 + min_freq;
 	}
