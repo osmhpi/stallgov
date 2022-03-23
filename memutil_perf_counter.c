@@ -291,7 +291,7 @@ static struct perf_event * memutil_allocate_perf_counter_for(unsigned int cpu, u
 	perf_attr.size = sizeof(perf_attr);
 	perf_attr.config = perf_event_config;
 	perf_attr.disabled = 0; // enable the event by default
-	perf_attr.exclude_kernel = 1;
+	perf_attr.exclude_kernel = 0;
 	perf_attr.exclude_hv = 1;
 
 	debug_info("Memutil: Perf create kernel counter");

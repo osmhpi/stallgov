@@ -29,7 +29,7 @@
 #define LOGBUFFER_SIZE 2000
 #define AGGREGATE_LOG 0
 #define PERF_EVENT_COUNT 3
-#define BUILD_WITH_DEFFERED_FREQ_SWITCH 1
+#define WITH_DEFFERED_FREQ_SWITCH 1
 #define HEURISTIC HEURISTIC_OFFCORE_STALLS
 
 #if HEURISTIC != HEURISTIC_IPC && HEURISTIC != HEURISTIC_OFFCORE_STALLS
@@ -67,7 +67,7 @@ struct memutil_policy {
 	unsigned int log_counter;
 #endif
 	/* The next fields are only needed if fast switch cannot be used: */
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 	raw_spinlock_t          update_lock;
 	struct			irq_work irq_work;
 	struct			kthread_work work;
@@ -99,9 +99,9 @@ static int max_ipc = 45;
 static int min_ipc = 10;
 
 module_param(max_ipc, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(max_ipc, "(IPC*100) value at which the max frequency should be used");
+MODULE_PARM_DESC(max_ipc, "max (IPC*100) value");
 module_param(min_ipc, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(min_ipc, "(IPC*100) value at which the min frequency should be used");
+MODULE_PARM_DESC(min_ipc, "min (IPC*100) value");
 
 #elif HEURISTIC == HEURISTIC_OFFCORE_STALLS
 
@@ -113,9 +113,9 @@ static int max_stalls_per_cycle = 65;
 static int min_stalls_per_cycle = 10;
 
 module_param(max_stalls_per_cycle, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(max_stalls_per_cycle, "(stalls_per_cycle*100) value at which the max frequency should be used");
+MODULE_PARM_DESC(max_stalls_per_cycle, "max (stalls_per_cycle*100) value");
 module_param(min_stalls_per_cycle, int, S_IRUSR | S_IRGRP | S_IROTH);
-MODULE_PARM_DESC(min_stalls_per_cycle, "(stalls_per_cycle*100) value at which the min frequency should be used");
+MODULE_PARM_DESC(min_stalls_per_cycle, "min (stalls_per_cycle*100) value");
 
 #endif
 
@@ -167,7 +167,7 @@ static int memutil_read_perf_event(struct memutil_policy *policy, int event_inde
 	return 0;
 }
 
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 static void memutil_deferred_set_frequency(struct memutil_policy* memutil_policy)
 {
 	//lock to prevent missing queuing new frequency update (see worker fn)
@@ -195,7 +195,7 @@ int memutil_set_frequency_to(struct memutil_policy* memutil_policy, unsigned int
 	if (policy->fast_switch_enabled) {
 		cpufreq_driver_fast_switch(policy, value);
 	} else {
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 		memutil_deferred_set_frequency(memutil_policy);
 #else
 		pr_err_ratelimited("Memutil: Cannot set frequency because fast switch is disabled");
@@ -254,7 +254,8 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 
 	new_frequency = policy->max;
 	if(unlikely(cycles == 0)) {
-		new_frequency = max(min_freq, last_freq - (max_freq - min_freq) / 10);
+		new_frequency = last_freq;
+		//new_frequency = max(min_freq, last_freq - (max_freq - min_freq) / 10);
 	}
 	else {
 #if HEURISTIC == HEURISTIC_IPC
@@ -293,7 +294,7 @@ memutil_policy_alloc(struct cpufreq_policy *policy)
 
 	memutil_policy->policy = policy;
 	memutil_policy->last_requested_freq = policy->max;
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 	raw_spin_lock_init(&memutil_policy->update_lock);
 #endif
 	return memutil_policy;
@@ -304,7 +305,7 @@ static void memutil_policy_free(struct memutil_policy *memutil_policy)
 	kfree(memutil_policy);
 }
 
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 static void memutil_work(struct kthread_work *work)
 {
 	struct memutil_policy *memutil_policy = container_of(work, struct memutil_policy, work);
@@ -417,7 +418,7 @@ static int memutil_init(struct cpufreq_policy *policy)
 
 	/* kthread for slow path */
 	if (!policy->fast_switch_enabled) {
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 		return_value = memutil_create_worker_thread(memutil_policy);
 		if (return_value) {
 			goto free_policy;
@@ -452,7 +453,7 @@ static void memutil_exit(struct cpufreq_policy *policy)
 
 	/* stop kthread for slow path */
 	if (!memutil_policy->policy->fast_switch_enabled) {
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 		memutil_stop_worker_thread(memutil_policy);
 #endif
 	}
@@ -597,7 +598,7 @@ static int memutil_start(struct cpufreq_policy *policy)
 
 	memutil_policy->last_freq_update_time	= 0;
 	memutil_policy->freq_update_delay_ns	= max(NSEC_PER_USEC * cpufreq_policy_transition_delay_us(policy), 5 * NSEC_PER_MSEC);
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 	memutil_policy->work_in_progress        = false;
 #endif
 	infofile_data.update_interval_ms = memutil_policy->freq_update_delay_ns / NSEC_PER_MSEC;
@@ -653,7 +654,7 @@ static void memutil_stop(struct cpufreq_policy *policy)
 
 	synchronize_rcu();
 
-#if BUILD_WITH_DEFFERED_FREQ_SWITCH
+#if WITH_DEFFERED_FREQ_SWITCH
 	if (!policy->fast_switch_enabled) {
 		irq_work_sync(&memutil_policy->irq_work);
 		kthread_cancel_work_sync(&memutil_policy->work);
