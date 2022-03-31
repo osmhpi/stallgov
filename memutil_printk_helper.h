@@ -1,5 +1,5 @@
 
-#define DO_DEBUG_OUTPUT 1
+#define DO_DEBUG_OUTPUT 0
 
 #ifndef debug_info
 #if DO_DEBUG_OUTPUT

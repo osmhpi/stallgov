@@ -1,49 +1,58 @@
-#include "memutil_log.h"
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * memutil_ringbuffer_log.c
+ *
+ * Implementation for memutil ringbuffer logging. See the memutil architecture wiki
+ * page for more general information on the logging architecture.
+ *
+ * COPYRIGHT_PLACEHOLDER
+ *
+ * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
+ */
 
 #include <linux/types.h>
-#include <linux/slab.h>
-#include <linux/atomic.h>
-#include <linux/vmalloc.h>
-#include <linux/mm.h>
+#include <linux/slab.h> //kmalloc
+#include <linux/mm.h> //kvmalloc
 
-#include "memutil_debugfs_log.h"
-#include "memutil_debug_log.h"
+#include "memutil_ringbuffer_log.h"
+#include "memutil_debugfs_logfile.h"
+#include "memutil_printk_helper.h"
 
-static void memutil_output_element(struct memutil_perf_data *element, bool write_logfile)
+/**
+ * memutil_output_element - Format the given log entry as string and append that
+ *                          string to the debugfs logfile
+ * @element: log element that should be written
+ */
+static void memutil_output_element(struct memutil_log_entry *element)
 {
 	char text[130];
 	size_t bytes_written;
 
-	if (!write_logfile) {
-		pr_info("Memutil: CPU[%u]: at=%llu value1=%llu, value2=%llu, value3=%llu, freq=%u",
-			element->cpu,
-			element->timestamp,
-			element->value1,
-			element->value2,
-			element->value3,
-			element->requested_freq);
-		return;
-	}
 	bytes_written = scnprintf(text, sizeof(text), "%u,%llu,%llu,%llu,%llu,%u\n", element->cpu,
 		  element->timestamp,
-		  element->value1,
-		  element->value2,
-		  element->value3,
+		  element->perf_value1,
+		  element->perf_value2,
+		  element->perf_value3,
 		  element->requested_freq);
 	memutil_debugfs_append_to_logfile(text, bytes_written);
 }
 
-static void memutil_output_data(struct memutil_ringbuffer *buffer, bool write_logfile)
+/**
+ * memutil_output_data - Format the content of the given ringbuffer as string and
+ *                       append it to the debugfs logfile
+ * @buffer: Ringbuffer whose content should be written
+ */
+static void memutil_output_data(struct memutil_ringbuffer *buffer)
 {
 	int i, read_offset, valid_size;
 	if (buffer->had_wraparound) {
-		pr_warn_ratelimited("Memutil: Ringbuffer had wraparound!");
+		pr_warn_ratelimited("Memutil: Ringbuffer had wraparound! Loss of data!");
 	}
 	read_offset = buffer->had_wraparound ? buffer->insert_offset : 0;
 	valid_size = buffer->had_wraparound ? buffer->size : buffer->insert_offset;
 
 	for (i = 0; i < valid_size; ++i) {
-		memutil_output_element(&buffer->data[read_offset], write_logfile);
+		memutil_output_element(&buffer->data[read_offset]);
 		read_offset = (read_offset + 1) % buffer->size;
 	}
 }
@@ -55,12 +64,12 @@ struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size)
 	size_t alloc_size = sizeof(struct memutil_ringbuffer);
 	
 	debug_info("Memutil: Initializing ringbuffer");
-	buffer = (struct memutil_ringbuffer *) kmalloc(alloc_size, GFP_KERNEL | GFP_NOWAIT);
+	buffer = (struct memutil_ringbuffer *) kmalloc(alloc_size, GFP_KERNEL);
 	if (!buffer) {
 		pr_warn("Memutil: Failed to allocate buffer of size: %zu", alloc_size);
 		return NULL;
 	}
-	alloc_size = sizeof(struct memutil_perf_data) * buffer_size;
+	alloc_size = sizeof(struct memutil_log_entry) * buffer_size;
 	data = kvmalloc(alloc_size, GFP_KERNEL);
 	if (!data) {
 		pr_warn("Memutil: Failed to allocate data-buffer of size: %zu", alloc_size);
@@ -68,7 +77,7 @@ struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size)
 		return NULL;
 	}
 	raw_spin_lock_init(&buffer->lock);
-	buffer->data = (struct memutil_perf_data *)data;
+	buffer->data = (struct memutil_log_entry *)data;
 	buffer->size = buffer_size;
 	buffer->insert_offset = 0;
 	buffer->had_wraparound = 0;
@@ -79,19 +88,22 @@ struct memutil_ringbuffer *memutil_open_ringbuffer(u32 buffer_size)
 
 void memutil_close_ringbuffer(struct memutil_ringbuffer *buffer)
 {
-	//smp_mb();
-	//memutil_output_data(buffer, false);
 	kvfree(buffer->data);
 	kfree(buffer);
 }
 
+/**
+ * clear_buffer - Clear the given ringbuffer. This simply resets the buffer's
+ *                insert_offset and had_wraparound member.
+ * @buffer: Buffer to clear
+ */
 static void clear_buffer(struct memutil_ringbuffer *buffer)
 {
 	buffer->had_wraparound = false;
 	buffer->insert_offset = 0;
 }
 
-int memutil_write_ringbuffer(struct memutil_ringbuffer *buffer, struct memutil_perf_data *data, u32 count)
+void memutil_write_ringbuffer(struct memutil_ringbuffer *buffer, struct memutil_log_entry *data, u32 count)
 {
 	int i;
 	raw_spin_lock(&buffer->lock);
@@ -103,7 +115,6 @@ int memutil_write_ringbuffer(struct memutil_ringbuffer *buffer, struct memutil_p
 		buffer->insert_offset = (buffer->insert_offset + 1) % buffer->size;
 	}
 	raw_spin_unlock(&buffer->lock);
-	return 0;
 }
 
 int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer)
@@ -113,26 +124,31 @@ int memutil_ringbuffer_append_to_logfile(struct memutil_ringbuffer *buffer)
 	unsigned long irqflags;
 
 	raw_spin_lock_init(&buffer_copy.lock);
-	alloc_size = sizeof(struct memutil_perf_data) * buffer->size;
+	alloc_size = sizeof(struct memutil_log_entry) * buffer->size;
 	buffer_copy.data = kvmalloc(alloc_size, GFP_KERNEL);
 	if (!buffer_copy.data) {
 		pr_warn("Memutil: Failed to allocate memory for ringbuffer copy");
-		return -1;
+		return -ENOMEM;
 	}
 	buffer_copy.size = buffer->size;
 
+	//We not only have to acquire the lock but also need to disable interrupts.
+	//Otherwise an interrupt could cause the update_frequency code of memutil
+	//to run while we hold the lock. As the update_frequency code is run
+	//in a context that is not interruptable, it would deadlock trying to acquire
+	//the lock we hold while we do not get the possibility to release the lock.
 	raw_spin_lock_irqsave(&buffer->lock, irqflags);
 	memcpy(
 		buffer_copy.data,
 		buffer->data,
-		buffer->had_wraparound ? alloc_size : (buffer->insert_offset*sizeof(struct memutil_perf_data))
+		buffer->had_wraparound ? alloc_size : (buffer->insert_offset*sizeof(struct memutil_log_entry))
 	);
 	buffer_copy.had_wraparound = buffer->had_wraparound;
 	buffer_copy.insert_offset = buffer->insert_offset;
 	clear_buffer(buffer);
 	raw_spin_unlock_irqrestore(&buffer->lock, irqflags);
 
-	memutil_output_data(&buffer_copy, true);
+	memutil_output_data(&buffer_copy);
 	kvfree(buffer_copy.data);
 	return 0;
 }

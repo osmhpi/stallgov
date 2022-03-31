@@ -27,11 +27,11 @@
 #include <uapi/linux/sched/types.h>
 #include <trace/events/power.h>
 
-#include "memutil_log.h"
-#include "memutil_debug_log.h"
+#include "memutil_ringbuffer_log.h"
+#include "memutil_printk_helper.h"
 #include "memutil_debugfs.h"
-#include "memutil_debugfs_log.h"
-#include "memutil_debugfs_info.h"
+#include "memutil_debugfs_logfile.h"
+#include "memutil_debugfs_infofile.h"
 #include "memutil_perf_read_local.h"
 #include "memutil_perf_counter.h"
 
@@ -42,7 +42,7 @@
  * Size (in bytes) for the buffer that will contain the log text
  * (the text of the file under <debugfs>/memutil/log.txt)
  */
-#define LOGBUFFER_SIZE 2000
+#define LOG_RINGBUFFER_SIZE 2000
 /*
  * The amount of perf events we measure. Adjusting this requires adjusting the
  * rest of this file as e.g. the heuristics assume that their events are available.
@@ -213,11 +213,11 @@ MODULE_PARM_DESC(event_name3, "Third perf counter name");
  */
 static void memutil_log_data(u64 time, u64 values[PERF_EVENT_COUNT], unsigned int cpu, unsigned int requested_freq, struct memutil_ringbuffer *logbuffer)
 {
-	struct memutil_perf_data data = {
+	struct memutil_log_entry data = {
 		.timestamp = time,
-		.value1 = values[0],
-		.value2 = values[1],
-		.value3 = values[2],
+		.perf_value1 = values[0],
+		.perf_value2 = values[1],
+		.perf_value3 = values[2],
 		.requested_freq = requested_freq,
 		.cpu = cpu
 	};
@@ -728,7 +728,7 @@ static bool memutil_should_update_frequency(struct memutil_policy *memutil_polic
 static void memutil_update_frequency_hook(
 	struct update_util_data *hook, 
 	u64 time,
-	unsigned int)
+	unsigned int flags)
 {
 	struct memutil_cpu *memutil_cpu = container_of(hook, struct memutil_cpu, update_util);
 	struct memutil_policy *memutil_policy = memutil_cpu->memutil_policy;
@@ -766,7 +766,7 @@ static void print_start_info(struct memutil_policy *memutil_policy, struct memut
 		);
 	pr_info("Memutil: Update delay=%ums - Ringbuffer will be full after %ld seconds",
 		infofile_data->update_interval_ms,
-		LOGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data->update_interval_ms));
+		LOG_RINGBUFFER_SIZE / (MSEC_PER_SEC / infofile_data->update_interval_ms));
 }
 
 /**
@@ -779,9 +779,9 @@ static void init_logging_once(struct memutil_policy *memutil_policy, struct memu
 		return;
 	}
 	infofile_data->core_count = num_online_cpus(); // cores available to scheduler
-	infofile_data->logbuffer_size = LOGBUFFER_SIZE;
+	infofile_data->log_ringbuffer_size = LOG_RINGBUFFER_SIZE;
 
-	is_logfile_initialized = memutil_debugfs_init(*infofile_data) == 0;
+	is_logfile_initialized = memutil_debugfs_init(infofile_data) == 0;
 	if (!is_logfile_initialized) {
 		pr_warn("Memutil: Failed to initialize memutil debugfs");
 	}
@@ -802,7 +802,7 @@ static void init_logging(struct memutil_policy *memutil_policy, struct memutil_i
 
 	mutex_lock(&memutil_init_mutex);
 	init_logging_once(memutil_policy, infofile_data);
-	memutil_policy->logbuffer = memutil_open_ringbuffer(LOGBUFFER_SIZE);
+	memutil_policy->logbuffer = memutil_open_ringbuffer(LOG_RINGBUFFER_SIZE);
 	if (!memutil_policy->logbuffer) {
 		pr_warn("Memutil: Failed to create memutil logbuffer");
 	} else if (is_logfile_initialized) {

@@ -1,46 +1,63 @@
-#include "memutil_debugfs.h"
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * memutil_debugfs.c
+ *
+ * Implementation file for general memutil debugfs functionality.
+ *
+ * COPYRIGHT_PLACEHOLDER
+ *
+ * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
+ */
 
 #include <linux/debugfs.h>
 #include <linux/fs.h>
 
-#include "memutil_debugfs_log.h"
-#include "memutil_debugfs_info.h"
+#include "memutil_debugfs.h"
+#include "memutil_debugfs_logfile.h"
+#include "memutil_debugfs_infofile.h"
 
+/** The root memutil debugfs directory */
 static struct dentry *root_dir = NULL;
 
-int memutil_debugfs_init(const struct memutil_infofile_data infofile_data)
+int memutil_debugfs_init(struct memutil_infofile_data *infofile_data)
 {
+	int return_value = 0;
 	if (root_dir != NULL) {
+		//already initialized
 		return 0;
 	}
 	root_dir = debugfs_create_dir("memutil", NULL);
 	if (IS_ERR(root_dir)) {
 		pr_warn("Memutil: Failed to initialize memutil debugfs root");
+		return_value = PTR_ERR(root_dir);
 		goto rootdir_error;
 	}
-	if (memutil_debugfs_log_init(root_dir) != 0) {
+	return_value = memutil_debugfs_logfile_init(root_dir);
+	if (return_value != 0) {
 		pr_warn("Memutil: Failed to initialize memutil debugfs log file");
-		goto filedata_error;
+		goto logfile_error;
 	}
-	if (memutil_debugfs_info_init(root_dir, infofile_data) != 0) {
+	return_value = memutil_debugfs_infofile_init(root_dir, infofile_data);
+	if (return_value != 0) {
 		pr_warn("Memutil: Failed to initialize memutil debugfs info file");
-		goto filedata_error;
+		goto infofile_error;
 	}
-	pr_info("Memutil: Initialized memutil debugfs (/sys/kernel/debug)");
+	pr_info("Memutil: Initialized memutil debugfs (<debugfs>/memutil)");
 	return 0;
 
-filedata_error:
+infofile_error:
+	memutil_debugfs_logfile_exit();
+logfile_error:
 	debugfs_remove_recursive(root_dir);
 rootdir_error:
 	root_dir = NULL;
-	return -1;
+	return return_value;
 }
 
-int memutil_debugfs_exit(void)
+void memutil_debugfs_exit(void)
 {
-	memutil_debugfs_log_exit(root_dir);
-	memutil_debugfs_info_exit(root_dir);
+	memutil_debugfs_logfile_exit();
+	memutil_debugfs_infofile_exit();
 	debugfs_remove_recursive(root_dir);
 	root_dir = NULL;
-	return 0;
 }
