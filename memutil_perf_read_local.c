@@ -1,15 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * memutil_perf_read_local.c
+ *
+ * Implementation file for own implementation of perf_read_local because that function
+ * is not exported for kernel modules.
+ *
+ * We mostly copied all the code / functions needed out of the kernel.
+ *
+ * COPYRIGHT_PLACEHOLDER
+ *
+ * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
+ */
+
 #include <linux/kernel.h>
 #include <linux/version.h>
 #include <linux/sched/clock.h>
-#include "linux/perf_event.h"
+#include <linux/perf_event.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
-	#define __load_acquire(ptr)                                         \
-	({                                                                  \
-		__unqual_scalar_typeof(*(ptr)) ___p = READ_ONCE(*(ptr));        \
-		barrier();                                                      \
-		___p;                                                           \
-	})
+#define __load_acquire(ptr)						\
+({									\
+	__unqual_scalar_typeof(*(ptr)) ___p = READ_ONCE(*(ptr));	\
+	barrier();							\
+	___p;								\
+})
 
 	enum event_type_t {
 		EVENT_FLEXIBLE = 0x1,
@@ -53,63 +67,55 @@ __perf_update_times(struct perf_event *event, u64 now, u64 *enabled, u64 *runnin
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
-	static inline int is_cgroup_event(struct perf_event *event)
-	{
-		return event->cgrp != NULL;
-	}
+static inline int is_cgroup_event(struct perf_event *event)
+{
+	return event->cgrp != NULL;
+}
 
-	static inline
-	u64 perf_cgroup_event_time_now(struct perf_event *event, u64 now)
-	{
-		struct perf_cgroup_info *t;
+static inline
+u64 perf_cgroup_event_time_now(struct perf_event *event, u64 now)
+{
+	struct perf_cgroup_info *t;
 
-		t = per_cpu_ptr(event->cgrp->info, event->cpu);
-		if (!__load_acquire(&t->active))
-			return t->time;
-		now += READ_ONCE(t->timeoffset);
-		return now;
-	}
+	t = per_cpu_ptr(event->cgrp->info, event->cpu);
+	if (!__load_acquire(&t->active))
+		return t->time;
+	now += READ_ONCE(t->timeoffset);
+	return now;
+}
 
-	static u64
-	perf_event_time_now(struct perf_event *event, u64 now)
-	{
-		struct perf_event_context *ctx = event->ctx;
+static u64
+perf_event_time_now(struct perf_event *event, u64 now)
+{
+	struct perf_event_context *ctx = event->ctx;
 
-		if (unlikely(!ctx))
-			return 0;
+	if (unlikely(!ctx))
+		return 0;
 
-		if (is_cgroup_event(event))
-			return perf_cgroup_event_time_now(event, now);
+	if (is_cgroup_event(event))
+		return perf_cgroup_event_time_now(event, now);
 
-		if (!(__load_acquire(&ctx->is_active) & EVENT_TIME))
-			return ctx->time;
+	if (!(__load_acquire(&ctx->is_active) & EVENT_TIME))
+		return ctx->time;
 
-		now += READ_ONCE(ctx->timeoffset);
-		return now;
-	}
+	now += READ_ONCE(ctx->timeoffset);
+	return now;
+}
 #endif
 
 static void
 __calc_timer_values(struct perf_event *event, u64 *now, u64 *enabled, u64 *running)
 {
 	u64 ctx_time;
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
-		*now = perf_clock();
-		ctx_time = perf_event_time_now(event, *now);
-	#else
-		ctx_time = event->shadow_ctx_time + perf_clock();
-	#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+	*now = perf_clock();
+	ctx_time = perf_event_time_now(event, *now);
+#else
+	ctx_time = event->shadow_ctx_time + perf_clock();
+#endif
 	__perf_update_times(event, ctx_time, enabled, running);
 }
 
-/*
- * NMI-safe method to read a local event, that is an event that
- * is:
- *   - either for the current task, or for this CPU
- *   - does not have inherit set, for inherited task events
- *     will not be local and we cannot read them atomically
- *   - must not have a pmu::count method
- */
 int memutil_perf_event_read_local(struct perf_event *event, u64 *value,
 			  u64 *enabled, u64 *running)
 {

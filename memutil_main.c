@@ -39,8 +39,8 @@
 #define HEURISTIC_OFFCORE_STALLS 2
 
 /*
- * Size (in bytes) for the buffer that will contain the log text
- * (the text of the file under <debugfs>/memutil/log.txt)
+ * Size for the ringbuffers (one per cpu) into which logging information
+ * will be written with each frequency update.
  */
 #define LOG_RINGBUFFER_SIZE 2000
 /*
@@ -163,7 +163,7 @@ static DEFINE_MUTEX(memutil_init_mutex);
 
 /* names of the perf counter events we measure */
 static char *event_name1 = "instructions";
-static char *event_name2 = "cycles";
+static char *event_name2 = "cycles"; //use same event twice to hopefully not use so many resources
 static char *event_name3 = "cycles";
 
 /* Max ipc value (in percent) (see wiki heursitics and porting page) */
@@ -179,7 +179,7 @@ MODULE_PARM_DESC(min_ipc, "min (IPC*100) value");
 #elif HEURISTIC == HEURISTIC_OFFCORE_STALLS
 
 /* names of the perf counter events we measure */
-static char *event_name1 = "inst_retired.any";
+static char *event_name1 = "cpu_clk_unhalted.thread"; //use same event twice to hopefully not use so many resources
 static char *event_name2 = "cpu_clk_unhalted.thread";
 static char *event_name3 = "cycle_activity.stalls_l2_miss";
 
@@ -390,11 +390,9 @@ void memutil_update_frequency(struct memutil_policy *memutil_policy, u64 time)
 {
 	u64			event_values[PERF_EVENT_COUNT];
 	s64			cycles;
-#if HEURISTIC == HEURISTIC_IPC
-	s64			instructions;
-#elif HEURISTIC == HEURISTIC_OFFCORE_STALLS
-	s64			offcore_stalls;
-#endif
+	s64 __maybe_unused	instructions;
+	s64 __maybe_unused	offcore_stalls;
+
 	unsigned int		new_frequency;
 	int                     max_freq, min_freq, last_freq;
 
