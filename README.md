@@ -63,7 +63,7 @@ vermagic:       5.15.5-100.fc34.x86_64 SMP mod_unload
 To insert the module, run: `insmod memutil.ko`
 
 `cpupower frequency-info` should now list `memutil` as one of the available governors.
-If you have an intel cpu you likely have to disable intel_pstate first. See "Disabling intel_pstate".
+If you have an intel cpu you likely have to disable intel\_pstate first. See "Disabling intel\_pstate".
 
 Switch to the governor by using `cpupower frequency-set -g memutil`.
 
@@ -75,6 +75,9 @@ You can customize the memutil module by providing parameters on insertion. **The
 List all parameters by reading the directory `ls /sys/module/memutil/parameters`.
 
 We currently support the parameters `event_name1`, `event_name2`, `event_name3` to customize the perf counters to read from. Provide them by stating them on insertion e.g. `insmod memutil.ko event_name1="inst_retired.any"`.
+
+Additionally we support `max_ipc` and `min_ipc` if the module is build with the IPC heuristic. These can be used to adjust the heuristic's behaviour.
+For the offcore stalls heuristic `max_stalls_per_cycle` and `min_stalls_per_cycle` are available.
 
 
 ### Removing
