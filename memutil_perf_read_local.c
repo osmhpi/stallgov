@@ -7,7 +7,8 @@
  *
  * We mostly copied all the code / functions needed out of the kernel.
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
+ * Largely copied from <linux-src>/kernel/events/core.c
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

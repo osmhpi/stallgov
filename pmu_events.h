@@ -5,7 +5,8 @@
  * Header file for defining platform specific events. Taken from
  * linux/tools/perf/perf/pmu-events/pmu-events.h
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
+ * Based on <linux-src>/tools/perf/pmu-events/pmu-events.h
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

@@ -5,7 +5,7 @@
  * Header file for helper functions that allow retrieving and matching
  * cpuid strings.
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

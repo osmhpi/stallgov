@@ -6,7 +6,7 @@
  * specifying either a portable event name (like cycles, instructions) or a
  * platform specific event name that is specified in "pmu_events.c".
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

@@ -6,7 +6,8 @@
  *
  * Note: Frequency values are always in KHz if not otherwise specified.
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
+ * Based on the schedutil governor in <linux-src>/kernel/sched/cpufreq_schedutil.c
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

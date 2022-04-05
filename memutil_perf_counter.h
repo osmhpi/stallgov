@@ -35,7 +35,7 @@
  *
  * For platform specific event names see "perf list --details" and the pmu_events.c file
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

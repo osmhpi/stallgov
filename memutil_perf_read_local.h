@@ -5,7 +5,7 @@
  * Header file for own implementation of perf_read_local because that function
  * is not exported for kernel modules.
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

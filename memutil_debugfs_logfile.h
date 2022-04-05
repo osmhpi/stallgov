@@ -6,7 +6,7 @@
  * provides data that was logged to the user in the form of a text file. For
  * more information see the memutil architecture wiki page.
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */

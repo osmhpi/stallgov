@@ -12,7 +12,7 @@
  * update_interval=<update_interval_milliseconds>
  * log_ringbuffer_size=<log_ringbuffer_size>
  *
- * COPYRIGHT_PLACEHOLDER
+ * Copyright (C) 2021-2022 Leon Matthes, Maximilian Stiede, Erik Griese
  *
  * Authors: Leon Matthes, Maximilian Stiede, Erik Griese
  */
