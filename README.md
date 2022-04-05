@@ -95,3 +95,4 @@ The memutil governor must be active when this command is run, otherwise it will 
 
 ## Output log
 You can view the debug output of memutil via `dmesg`.
+Further debug data can be read from DebugFS at `/sys/kernel/debug/memutil/` - see [Wiki/Memutil Architecture - Logging](https://gitlab.hpi.de/osm/osm-energy/masterprojekt-ws21-compendium/-/wikis/Memutil%20Architecture#logging) and `copy-log.sh` for details.
