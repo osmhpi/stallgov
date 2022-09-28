@@ -19,6 +19,11 @@ A Linux Kernel with version 5.14 or above.
     - kernel-headers
     - kmod
 
+### Modifing the Linux kernel
+
+Some minor tweaks are required to use the kernel module. See [KERNEL_HACKING.md](KERNEL_HACKING.md) for details.
+
+
 ### Disabling intel_pstate (Intel CPUs only)
 
 To disable intel_pstate add the kernel commandline parameter "intel_pstate=disable". This can be done temporarily by:
