@@ -5,8 +5,10 @@ StallGov is a Linux CPU frequency governor based on hardware performance measure
 At some point in time this project was called `memutil`, you will find the name still around.
 
 See also:
-    * [Evaluation scripts](https://github.com/osmhpi/stallgov-evaluation)
-    * [Documentation](https://github.com/osmhpi/stallgov-docs)
+
+* [Documentation](https://github.com/osmhpi/stallgov-docs)
+* [Evaluation scripts](https://github.com/osmhpi/stallgov-evaluation)
+
 
 ## Dependencies
 
