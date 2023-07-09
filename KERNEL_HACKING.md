@@ -1,6 +1,6 @@
 # Compiling kernel
 
-Using the memutil governor requires some minor changes to the linux kernel.
+Using the StallGov governor requires some minor changes to the linux kernel.
 
 Follow these steps:
 
